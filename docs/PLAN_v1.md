@@ -33,7 +33,7 @@ This plan represents the finalized implementation roadmap for CodeGrapher. It ha
 >    - `networkx~=3.0`
 > 2. Create standard directories: `src/codegrapher/`, `tests/`, `scripts/`, `fixtures/`, `config/`.
 > 3. Initialize `__init__.py` in source directory.
-> 4. Ensure `python_requires = ">=3.8"`.
+> 4. Ensure `python_requires = ">=3.10"`.
 
 **Acceptance:**
 - [ ] `uv pip install -e .` succeeds.

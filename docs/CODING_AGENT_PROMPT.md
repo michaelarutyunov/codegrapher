@@ -50,7 +50,7 @@ You are implementing CodeGrapher v1.0, an MCP server that provides token-efficie
 
 ### Scope Boundaries (PRD Section 4)
 **In scope:**
-- Python 3.8-3.12 mono-repos, ≤50k LOC
+- Python 3.10-3.12 mono-repos, ≤50k LOC
 - CPU-only embeddings (no GPU)
 - MCP stdio transport
 - Incremental graph & vector index

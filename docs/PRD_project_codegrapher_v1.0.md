@@ -33,13 +33,13 @@ Target user: **solo developer** who repeatedly hits the Claude Code plan limit a
 ---
 
 ## 4. Scope
-**In scope**  
-- Python 3.12+
-- Single mono-repo, ≤ 50 k LOC  
-- Embeddings on CPU (no GPU required)  
-- MCP stdio transport; Claude Code first client  
-- Incremental graph & vector index  
-- Secret scrubbing before embed  
+**In scope**
+- Python 3.10+
+- Single mono-repo, ≤ 50 k LOC
+- Embeddings on CPU (no GPU required)
+- MCP stdio transport; Claude Code first client
+- Incremental graph & vector index
+- Secret scrubbing before embed
 - MIT licence, full OSS  
 
 **Out of scope (v1)**  
@@ -355,7 +355,7 @@ If missing, `detect-secrets` runs with default rules (no historical false-positi
 ## 11. Installation & Onboarding Flow
 
 ### Prerequisites
-- Python 3.8+ with pip
+- Python 3.10+
 - Git repository (for auto-detection)
 - 500 MB free disk space
 - 2 GB RAM

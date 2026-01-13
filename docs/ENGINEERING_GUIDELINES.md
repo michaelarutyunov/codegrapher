@@ -1044,7 +1044,7 @@ codegraph mcp-config >> ~/.config/claude/mcp_servers.json
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - 2GB RAM
 - 500MB disk space
 
