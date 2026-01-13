@@ -1,8 +1,8 @@
 # CodeGrapher v1.0 Implementation Progress
 
 **Last Updated:** 2026-01-13
-**Current Phase:** Phase 8 (pending)
-**Completion:** 7/12 phases complete (58%)
+**Current Phase:** Phase 10 (pending)
+**Completion:** 9/12 phases complete (75%)
 
 ---
 
@@ -585,12 +585,186 @@ Test Coverage:
 
 ---
 
+## Phase 8: Incremental Indexing Logic
+
+**Status:** ✅ COMPLETE
+
+### Implementation Summary
+Created `indexer.py` implementing PRD Recipe 2 (Incremental AST Diff) and PRD Recipe 5 (Transaction Safety). Maintains LRU cache of pickled ASTs for fast incremental updates, with atomic transactions across SQLite and FAISS that survive process crashes.
+
+### Files Created
+- `src/codegrapher/indexer.py` (488 LOC)
+- `tests/test_indexer.py` (435 LOC)
+- `scripts/kill_test.py` (165 LOC)
+- `scripts/benchmark_incremental.py` (267 LOC)
+
+### Deviations from PRD/Engineering Guidelines
+
+| Issue | PRD Requirement | Actual Implementation | Justification |
+|-------|----------------|---------------------|---------------|
+| Cache eviction | FIFO for v1 | FIFO (preserves insertion order) | Simplifies implementation; true LRU would require tracking access timestamps |
+| `update_symbol()` method | Not specified | Added alias to `insert_symbol()` | Database uses INSERT OR REPLACE, so update is same operation |
+
+### Test Results
+```bash
+python -m pytest tests/test_indexer.py -v
+# 33 passed in 4.95s
+
+Test Coverage:
+- ✅ SymbolDiff dataclass (empty, deleted, added, modified)
+- ✅ IncrementalIndexer (init, cache size, update_file)
+- ✅ First-time file indexing (cache miss)
+- ✅ No-change detection (cache hit)
+- ✅ Docstring change detection
+- ✅ Signature change detection
+- ✅ Deletion detection
+- ✅ Addition detection
+- ✅ FIFO cache eviction
+- ✅ Cache invalidate and clear
+- ✅ new_source parameter (file doesn't need to exist)
+- ✅ Syntax error handling
+- ✅ FileNotFoundError handling
+- ✅ _needs_reembed helper (lineno, docstring, signature, decorator, base, value changes)
+- ✅ atomic_update context manager (commit, rollback)
+- ✅ apply_diff function (deletions, additions, modifications, empty)
+
+# Kill test
+python scripts/kill_test.py
+# PASS: Atomic transaction correctly rolled back after crash
+
+# Performance benchmark
+python scripts/benchmark_incremental.py
+# Initial indexing: 1.10ms
+# Docstring change: 0.72ms  (target: <200ms) ✅
+# No-change update: 0.37ms   (target: <200ms) ✅
+```
+
+### Classes & Functions Implemented
+| Class/Function | Purpose |
+|----------------|---------|
+| `SymbolDiff` | Dataclass for tracking changes (deleted, added, modified) |
+| `IncrementalIndexer` | Manages LRU cache of 50 pickled ASTs |
+| `IncrementalIndexer.update_file()` | Compute minimal diff by comparing ASTs |
+| `IncrementalIndexer._build_symbol_map()` | Build (name, type) -> AST node mapping |
+| `IncrementalIndexer._update_cache()` | FIFO eviction when cache exceeds limit |
+| `IncrementalIndexer.invalidate()` | Remove file from cache |
+| `IncrementalIndexer.clear()` | Clear all cached ASTs |
+| `atomic_update()` | Context manager for atomic SQLite+FAISS transactions |
+| `apply_diff()` | Apply SymbolDiff to database and FAISS index |
+| `_node_to_symbol()` | Convert AST node to Symbol object |
+| `_needs_reembed()` | Check if symbol changed enough to re-embed |
+
+### Key Design Decisions
+1. **FIFO cache eviction**: Uses insertion order (Python 3.7+ dict preserves order) for simplicity. True LRU would require tracking access timestamps, adding complexity. PRD Recipe 2 specifies "FIFO eviction for simplicity in v1".
+2. **AST comparison by (name, type)**: Symbols are keyed by `(name, node_type)` tuples. This handles rename/delete/add cases correctly. Two symbols with same name but different types (e.g., function vs class) are treated as different symbols.
+3. **Crash safety via BEGIN IMMEDIATE**: Uses SQLite's `BEGIN IMMEDIATE` to acquire write lock immediately, preventing concurrent writers. On exception, both SQLite and FAISS are rolled back to pre-transaction state.
+4. **Placeholder embeddings in diff**: `_node_to_symbol()` creates symbols with zero embeddings. These are replaced during the embedding phase before actual FAISS insertion.
+
+### Insights
+1. **Why pickle for AST cache?** AST nodes can't be pickled directly because they contain circular references. Using `pickle.dumps(ast_module)` works because the Module node is the root and contains all child nodes. The unpickled AST is functionally equivalent to the original.
+2. **Why FIFO instead of LRU?** True LRU requires tracking access timestamps and reordering on every cache hit, which adds O(log n) complexity. FIFO eviction (removing oldest entry when cache is full) is O(1) and sufficient for v1. The cache is warmed on first access, and working set changes are rare during active development.
+3. **Crash recovery strategy**: The `atomic_update` context manager snapshots FAISS state before the transaction. On crash, FAISS is rolled back to the snapshot by replacing the in-memory index and symbol_ids list. This works because FAISS index is only persisted on successful commit.
+4. **Assignment nodes have no docstrings**: When comparing `ast.Assign` nodes, we skip docstring comparison and instead compare unparsed values. This is correct because module-level assignments don't have docstrings.
+
+### Bug Fixed During Implementation
+**Cache miss bug**: Original implementation called `extract_symbols(file_path)` on cache miss, which tried to read the file even when `new_source` parameter was provided. Fixed by building symbol map directly from parsed `new_ast`, making `new_source` parameter work correctly.
+
+### Acceptance Criteria
+- ✅ Unit tests pass (33 tests)
+- ✅ Kill test passes (atomic rollback verified)
+- ✅ Performance <200ms for incremental updates (actual: ~0.7ms)
+- ✅ Module is 488 LOC (< 600 limit)
+- ✅ All type checking passes
+
+---
+
+## Phase 9: File Watching & Auto-Update
+
+**Status:** ✅ COMPLETE
+
+### Implementation Summary
+Created `watcher.py` implementing PRD Phase 9: File Watching & Auto-Update. Uses watchdog to monitor Python source files for changes and triggers incremental index updates automatically with debouncing and bulk change handling.
+
+### Files Created
+- `src/codegrapher/watcher.py` (476 LOC)
+- `tests/test_watcher.py` (314 LOC)
+
+### Deviations from PRD/Engineering Guidelines
+
+| Issue | PRD Requirement | Actual Implementation | Justification |
+|-------|----------------|---------------------|---------------|
+| watchdog event types | Not specified | Handles FileCreatedEvent, FileModifiedEvent, FileDeletedEvent, FileMovedEvent | Covers all file change scenarios |
+| Debounce interval | Not specified | 0.5 seconds | Balances responsiveness with avoiding redundant updates |
+| Bulk change threshold | >20 files | >20 files | Matches PRD requirement |
+
+### Test Results
+```bash
+python -m pytest tests/test_watcher.py -v
+# 21 passed in 3.38s
+
+Test Coverage:
+- ✅ PendingChange dataclass (creation, timestamp)
+- ✅ IndexUpdateHandler initialization
+- ✅ Change queuing with debouncing
+- ✅ File event handling (created, modified, deleted, moved)
+- ✅ Non-.py files ignored
+- ✅ Directories ignored
+- ✅ Move events generate both deletion and creation
+- ✅ Statistics tracking
+- ✅ Deletion removes symbols from index
+- ✅ FileWatcher initialization
+- ✅ Bulk callback support
+- ✅ Git hook template generation
+- ✅ Git hook installation
+- ✅ Existing hook detection
+```
+
+### Classes & Functions Implemented
+| Class/Function | Purpose |
+|----------------|---------|
+| `PendingChange` | Dataclass for pending file changes with timestamp |
+| `IndexUpdateHandler` | Handles watchdog events, debouncing, bulk detection |
+| `IndexUpdateHandler.on_created()` | Handle file creation events |
+| `IndexUpdateHandler.on_modified()` | Handle file modification events |
+| `IndexUpdateHandler.on_deleted()` | Handle file deletion events |
+| `IndexUpdateHandler.on_moved()` | Handle file move/rename events |
+| `IndexUpdateHandler._queue_change()` | Queue change for debounced processing |
+| `IndexUpdateHandler._process_changes_loop()` | Background thread for processing changes |
+| `IndexUpdateHandler._process_pending_changes()` | Process queued changes with bulk detection |
+| `IndexUpdateHandler._process_single_change()` | Process individual file change |
+| `IndexUpdateHandler._handle_deletion()` | Remove deleted file's symbols from index |
+| `FileWatcher` | Simple API wrapper for repository watching |
+| `get_git_hook_template()` | Generate post-commit hook shell script |
+| `install_git_hook()` | Install hook to `.git/hooks/post-commit` |
+
+### Key Design Decisions
+1. **Debouncing with 0.5s delay**: File editors emit multiple events for a single save (create temp, write, rename). Debouncing groups these into a single update.
+2. **Bulk change threshold of 20 files**: When >20 files change rapidly (git rebase, bulk refactor), triggers full rebuild instead of incremental updates for better throughput.
+3. **Background processor thread**: Changes are processed asynchronously in a daemon thread to avoid blocking file system monitoring.
+4. **Git hook as safety net**: The post-commit hook ensures index consistency even if the watcher process dies (crash, system restart).
+5. **Secret detection before indexing**: Each changed file is scanned for secrets before being indexed, preventing sensitive data exposure.
+
+### Insights
+1. **Why debouncing?** Without debouncing, a single file save could trigger 3-4 index updates (temp file created, content written, rename, metadata updated). The 0.5s delay groups rapid-fire events into one update.
+2. **The bulk change tradeoff:** Processing 100+ files incrementally would take seconds (100 × 0.7ms = 70ms minimum). A full rebuild might take 5-10 seconds but is simpler and more reliable. The 20-file threshold balances these concerns.
+3. **Thread safety with pending changes dict:** A threading.Lock protects `_pending_changes` dict since both the watchdog thread (event handlers) and processor thread access it concurrently.
+4. **Git hooks vs watchers:** Watchers provide real-time updates during active development but can die. Git hooks run on every commit and ensure the index is eventually consistent, even if the watcher was dead when files changed.
+
+### Acceptance Criteria
+- ✅ File edits trigger near-instant updates (debounced 0.5s)
+- ✅ Git hook is generated and installable
+- ✅ Bulk changes don't block the main thread (background processing)
+- ✅ Module is 476 LOC (< 600 limit)
+- ✅ All 21 tests pass
+
+---
+
 ## Remaining Phases
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 8 | Incremental Indexing Logic | Pending |
-| 9 | File Watching & Auto-Update | Pending |
+| 8 | Incremental Indexing Logic | ✅ Complete |
+| 9 | File Watching & Auto-Update | ✅ Complete |
 | 10 | MCP Server Interface | Pending |
 | 11 | CLI & Build Tools | Pending |
 | 11.5 | Performance Verification | Pending |
@@ -603,13 +777,15 @@ Test Coverage:
 ### Lines of Code
 | Module | LOC | Limit | Status |
 |--------|-----|-------|--------|
-| `models.py` | 398 | 600 | ✅ OK |
-| `parser.py` | 452 | 600 | ✅ OK |
+| `models.py` | 399 | 600 | ✅ OK |
+| `parser.py` | 449 | 600 | ✅ OK |
 | `graph.py` | 335 | 600 | ✅ OK |
 | `vector_store.py` | 373 | 600 | ✅ OK |
-| `resolver.py` | 359 | 600 | ✅ OK |
+| `resolver.py` | 334 | 600 | ✅ OK |
 | `secrets.py` | 277 | 600 | ✅ OK |
-| **Total** | **2194** | - | - |
+| `indexer.py` | 488 | 600 | ✅ OK |
+| `watcher.py` | 476 | 600 | ✅ OK |
+| **Total** | **3131** | - | - |
 
 ### Dependencies Used
 - ✅ Pydantic (data validation)
@@ -619,19 +795,20 @@ Test Coverage:
 - ✅ faiss-cpu (vector search)
 - ✅ transformers (embeddings)
 - ✅ torch (PyTorch backend for transformers)
+- ✅ watchdog (file monitoring)
 
 ---
 
 ## Open Questions / Risks
 
-1. **FAISS index corruption**: Need implement crash recovery per PRD Recipe 5 (atomic transactions across SQLite + FAISS) - planned for Phase 8.
-2. **Performance targets**: Phase 11.5 will verify all PRD Section 10 budgets (query <500ms, update <1s, full build <30s).
+1. ~~**FAISS index corruption**: Need implement crash recovery per PRD Recipe 5 (atomic transactions across SQLite + FAISS)~~ ✅ **RESOLVED** - Phase 8 implemented `atomic_update()` context manager that snapshots FAISS state and rolls back both SQLite and FAISS on exception.
+2. **Performance targets**: Phase 11.5 will verify all PRD Section 10 budgets (query <500ms, update <1s, full build <30s). Incremental update target (<200ms) already verified in Phase 8.
 
 ---
 
 ## Next Steps
 
-1. **Continue Phase 8 implementation** (Incremental Indexing Logic)
+1. **Continue Phase 10 implementation** (MCP Server Interface)
 
 ---
 
