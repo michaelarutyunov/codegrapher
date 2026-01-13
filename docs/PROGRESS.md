@@ -18,6 +18,52 @@ This document tracks implementation progress of CodeGrapher v1.0, including devi
 
 ---
 
+## Technical Decisions
+
+### Python 3.10+ Requirement (Updated Phase 7)
+
+**Decision:** Dropped Python 3.8-3.9 support. Requires Python 3.10+.
+
+**Rationale:**
+- `sys.stdlib_module_names` (3.10+) provides accurate stdlib detection without hardcoded lists
+- `ast.unparse()` (3.9+) eliminates need for custom unparser fallback
+- Reduces codebase by ~28 lines of compatibility code
+- Python 3.10+ is widely available (Ubuntu 22.04+, Debian 12+, all major cloud providers)
+
+**Changes Made:**
+1. Updated `pyproject.toml`: `requires-python = ">=3.10"`
+2. Removed hardcoded stdlib module list from `resolver.py` (25 lines saved)
+3. Removed custom unparser fallback from `parser.py` (3 lines saved)
+4. Updated classifiers: only 3.10, 3.11, 3.12
+5. Updated tool configs: black target-version, mypy python_version
+
+**Before (resolver.py):**
+```python
+# Had to maintain 40-line hardcoded stdlib list for 3.8-3.9
+if hasattr(sys, "stdlib_module_names"):
+    stdlib = set(sys.stdlib_module_names)
+else:
+    stdlib = set(sys.builtin_module_names)
+    known_stdlib = {"argparse", "array", ...}  # 30+ modules
+    stdlib.update(known_stdlib)
+```
+
+**After (resolver.py):**
+```python
+# 3.10+ guarantee: sys.stdlib_module_names always available
+_stdlib_modules = set(sys.stdlib_module_names)
+```
+
+**Impact:**
+- Test coverage: All 47 tests pass on Python 3.12
+- LOC reduction: resolver.py 359→334, parser.py 452→449
+- No functional changes - stdlib detection is more accurate
+
+**Why Not 3.11+?**
+Python 3.11 adds `Self` type, `tomllib`, and exception groups - none of which CodeGrapher uses. The key simplification comes from 3.10's `sys.stdlib_module_names`, not 3.11 features.
+
+---
+
 ## Phase 1: Environment Setup & Scaffolding
 
 **Status:** ✅ COMPLETE

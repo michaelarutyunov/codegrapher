@@ -23,8 +23,7 @@ _STDLIB_MODULES: Optional[Set[str]] = None
 def _get_stdlib_modules() -> Set[str]:
     """Get the set of standard library module names.
 
-    Uses sys.stdlib_module_names (Python 3.10+) or falls back to
-    sys.builtin_module_names with a hardcoded list of common stdlib modules.
+    Uses sys.stdlib_module_names (available in Python 3.10+).
 
     Returns:
         Set of standard library module names
@@ -33,33 +32,9 @@ def _get_stdlib_modules() -> Set[str]:
     if _STDLIB_MODULES is not None:
         return _STDLIB_MODULES
 
-    stdlib: Set[str] = set()
-
-    # Python 3.10+ has sys.stdlib_module_names
-    if hasattr(sys, "stdlib_module_names"):
-        stdlib = set(sys.stdlib_module_names)
-    else:
-        # Fallback for Python 3.8-3.9: use builtins + known stdlib
-        stdlib = set(sys.builtin_module_names)
-        # Common stdlib modules (not exhaustive, but covers most used)
-        known_stdlib = {
-            "argparse", "array", "asyncio", "base64", "bisect", "bool",
-            "collections", "contextlib", "csv", "dataclasses", "datetime",
-            "decimal", "dict", "enum", "errno", "filecmp", "float", "fnmatch",
-            "fractions", "functools", "gc", "glob", "graphlib", "gzip",
-            "hashlib", "heapq", "html", "int", "io", "ipaddress", "itertools",
-            "json", "list", "logging", "math", "mmap", "numbers", "operator",
-            "os", "pathlib", "pickle", "pprint", "random", "re", "select",
-            "set", "shelve", "shutil", "signal", "socket", "sqlite3", "str",
-            "string", "struct", "subprocess", "tarfile", "tempfile", "textwrap",
-            "threading", "time", "timeit", "token", "traceback", "tuple",
-            "types", "typing", "typing_extensions", "unicodedata", "unittest",
-            "urllib", "uuid", "warnings", "weakref", "xml", "zipfile", "zoneinfo",
-        }
-        stdlib.update(known_stdlib)
-
-    _STDLIB_MODULES = stdlib
-    return stdlib
+    # Python 3.10+ provides frozen set of stdlib module names
+    _STDLIB_MODULES = set(sys.stdlib_module_names)
+    return _STDLIB_MODULES
 
 
 def _is_stdlib(module_name: str) -> bool:
