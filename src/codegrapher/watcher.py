@@ -42,6 +42,28 @@ DEBOUNCE_SECONDS = 0.5  # Wait before processing changes (debounce)
 WATCHDOG_POLL_INTERVAL = 1.0  # Observer polling interval
 
 
+def _decode_path(path: object) -> str:
+    """Decode a path from watchdog event to string.
+
+    Watchdog events can have src_path/dest_path as str, bytes, or memoryview.
+    This helper handles all three cases.
+
+    Args:
+        path: The path from a watchdog event
+
+    Returns:
+        The path as a string
+    """
+    if isinstance(path, str):
+        return path
+    if isinstance(path, bytes):
+        return path.decode()
+    if isinstance(path, memoryview):
+        return path.tobytes().decode()
+    # Fallback for unexpected types
+    return str(path)
+
+
 @dataclass
 class PendingChange:
     """A pending file change waiting to be processed.
@@ -104,7 +126,7 @@ class IndexUpdateHandler(FileSystemEventHandler):
         """Handle file creation event."""
         if event.is_directory:
             return
-        src_path = event.src_path if isinstance(event.src_path, str) else event.src_path.decode()
+        src_path = _decode_path(event.src_path)
         if not src_path.endswith(".py"):
             return
 
@@ -115,7 +137,7 @@ class IndexUpdateHandler(FileSystemEventHandler):
         """Handle file modification event."""
         if event.is_directory:
             return
-        src_path = event.src_path if isinstance(event.src_path, str) else event.src_path.decode()
+        src_path = _decode_path(event.src_path)
         if not src_path.endswith(".py"):
             return
 
@@ -126,7 +148,7 @@ class IndexUpdateHandler(FileSystemEventHandler):
         """Handle file deletion event."""
         if event.is_directory:
             return
-        src_path = event.src_path if isinstance(event.src_path, str) else event.src_path.decode()
+        src_path = _decode_path(event.src_path)
         if not src_path.endswith(".py"):
             return
 
@@ -138,10 +160,8 @@ class IndexUpdateHandler(FileSystemEventHandler):
         if event.is_directory:
             return
 
-        src_path_str = event.src_path if isinstance(event.src_path, str) else event.src_path.decode()
-        dest_path_str = event.dest_path if isinstance(event.dest_path, str) else event.dest_path.decode()
-        src_path = Path(src_path_str)
-        dest_path = Path(dest_path_str)
+        src_path = Path(_decode_path(event.src_path))
+        dest_path = Path(_decode_path(event.dest_path))
 
         # Handle source deletion
         if src_path.suffix == ".py":
