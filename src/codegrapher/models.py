@@ -189,6 +189,16 @@ class Database:
         )
         conn.commit()
 
+    def update_symbol(self, symbol: Symbol) -> None:
+        """Update an existing symbol in the database.
+
+        This is an alias for insert_symbol() since we use INSERT OR REPLACE.
+
+        Args:
+            symbol: Symbol object with updated values
+        """
+        self.insert_symbol(symbol)
+
     def insert_symbols_batch(self, symbols: List[Symbol]) -> None:
         """Insert multiple symbols in a single transaction.
 
