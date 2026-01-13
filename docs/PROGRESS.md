@@ -1,8 +1,8 @@
 # CodeGrapher v1.0 Implementation Progress
 
 **Last Updated:** 2026-01-13
-**Current Phase:** Phase 7 (pending)
-**Completion:** 6/12 phases complete (50%)
+**Current Phase:** Phase 8 (pending)
+**Completion:** 7/12 phases complete (58%)
 
 ---
 
@@ -476,11 +476,73 @@ Test Coverage:
 
 ---
 
+## Phase 7: Secret Detection (Safety Layer)
+
+**Status:** ✅ COMPLETE
+
+### Implementation Summary
+Created `secrets.py` implementing PRD Section 8: Secret & Safety Pipeline. Uses detect-secrets as a CLI wrapper (via subprocess) to scan files for sensitive data (API keys, passwords, tokens, private keys, high-entropy strings). Files with secrets are excluded from indexing to prevent sensitive data exposure.
+
+### Files Created
+- `src/codegrapher/secrets.py` (277 LOC)
+- `tests/test_secrets.py` (203 LOC)
+
+### Deviations from PRD/Engineering Guidelines
+
+| Issue | PRD Requirement | Actual Implementation | Justification |
+|-------|----------------|---------------------|---------------|
+| CLI wrapper approach | "Use detect-secrets as a CLI wrapper" | Uses subprocess.run() to call detect-secrets CLI | Python API has complex initialization; CLI is simpler and more reliable |
+
+### Test Results
+```bash
+python -m pytest tests/test_secrets.py -v
+# 16 passed in 0.04s
+
+Test Coverage:
+- ✅ Clean file detection (returns False)
+- ✅ Secret detection (returns True)
+- ✅ Baseline file support
+- ✅ Excluded files tracking (add, check, remove, list)
+- ✅ Timeout handling
+- ✅ Missing detect-secrets handling
+- ✅ Invalid JSON handling
+- ✅ Sorted file list
+- ✅ No duplicate entries
+```
+
+### Functions Implemented
+| Function | Purpose |
+|----------|---------|
+| `scan_file()` | Scan file for secrets via detect-secrets CLI |
+| `_add_to_excluded_files()` | Add file to `.codegraph/excluded_files.txt` |
+| `is_excluded()` | Check if file is in excluded list |
+| `get_excluded_files()` | Get list of all excluded files |
+| `clear_excluded_file()` | Remove file from excluded list |
+| `SecretFoundError` | Exception raised when secret detected |
+
+### Key Design Decisions
+1. **CLI wrapper over Python API**: The detect-secrets Python API has complex plugin initialization that varies across versions. Using subprocess to call the CLI is simpler and more reliable.
+2. **Graceful degradation**: If detect-secrets isn't installed or times out, the file is treated as clean (log warning only). This prevents secret detection from blocking indexing.
+3. **Sorted excluded list**: Files are stored sorted alphabetically for consistent output and easier debugging.
+4. **10-second timeout**: Per-file timeout prevents runaway scans from blocking the indexer.
+
+### Insights
+1. **Why CLI wrapper?** The detect-secrets Python API requires proper plugin initialization and settings configuration. The CLI handles all this complexity internally. Using subprocess.run() gives us reliable behavior without dealing with API changes between versions.
+2. **Graceful degradation vs hard failure**: For secret detection, it's better to accidentally index a file with secrets than to crash the entire indexing pipeline. Users get a warning log, and the `.secrets.baseline` file can be used to manage false positives.
+3. **Excluded file persistence**: Storing excluded files in `.codegraph/excluded_files.txt` provides a simple way to track files without secrets, persists across runs, and can be manually edited if needed.
+
+### Acceptance Criteria
+- ✅ Files with secrets are skipped
+- ✅ Baseline file is respected if it exists
+- ✅ Module is 277 LOC (< 600 limit)
+- ✅ All 16 tests pass
+
+---
+
 ## Remaining Phases
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 7 | Secret Detection (Safety Layer) | Pending |
 | 8 | Incremental Indexing Logic | Pending |
 | 9 | File Watching & Auto-Update | Pending |
 | 10 | MCP Server Interface | Pending |
@@ -500,7 +562,8 @@ Test Coverage:
 | `graph.py` | 335 | 600 | ✅ OK |
 | `vector_store.py` | 373 | 600 | ✅ OK |
 | `resolver.py` | 359 | 600 | ✅ OK |
-| **Total** | **1917** | - | - |
+| `secrets.py` | 277 | 600 | ✅ OK |
+| **Total** | **2194** | - | - |
 
 ### Dependencies Used
 - ✅ Pydantic (data validation)
@@ -522,7 +585,7 @@ Test Coverage:
 
 ## Next Steps
 
-1. **Continue Phase 6 implementation** (Import Resolution Logic)
+1. **Continue Phase 8 implementation** (Incremental Indexing Logic)
 
 ---
 
