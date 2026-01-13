@@ -50,6 +50,102 @@ def find_root() -> Path:
     return root
 
 
+def _should_exclude_path(file_path: Path, repo_root: Path) -> bool:
+    """Check if a file path should be excluded from indexing.
+
+    Excludes common non-source directories and files:
+    - Virtual environments: .venv, venv, .virtualenv, virtualenv, env
+    - Cache directories: __pycache__, .pytest_cache, .tox, .mypy_cache, .ruff_cache
+    - Build artifacts: build, dist, *.egg-info
+    - IDE directories: .vscode, .idea, .DS_Store
+    - Hidden files/directories starting with . (except specific allowed ones)
+
+    Args:
+        file_path: Path to check
+        repo_root: Repository root for relative path computation
+
+    Returns:
+        True if the file should be excluded, False otherwise
+    """
+    # Get relative path from repo root
+    try:
+        rel_path = file_path.relative_to(repo_root)
+    except ValueError:
+        # File is not under repo_root (shouldn't happen with rglob)
+        return True
+
+    # Exclude common non-source directories
+    exclude_patterns = [
+        # Virtual environments
+        ".venv",
+        "venv",
+        ".virtualenv",
+        "virtualenv",
+        "env",
+        ".env",
+        "ENV",
+        "envs",
+        # Cache directories
+        "__pycache__",
+        ".pytest_cache",
+        ".tox",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".hypothesis",
+        ".coverage",
+        # Build artifacts
+        "build",
+        "dist",
+        "*.egg-info",
+        "*.egg",
+        # IDE directories
+        ".vscode",
+        ".idea",
+        ".DS_Store",
+        ".eclipse",
+        # Node modules (if present)
+        "node_modules",
+    ]
+
+    # Check if any part of the path matches exclude patterns
+    parts = rel_path.parts
+    for part in parts:
+        for pattern in exclude_patterns:
+            if pattern.endswith("/"):
+                # Directory pattern (ends with /)
+                if part == pattern.rstrip("/"):
+                    return True
+            elif pattern.startswith("*."):
+                # Wildcard pattern (e.g., *.egg-info)
+                suffix = pattern[1:]
+                if part.endswith(suffix):
+                    return True
+            elif pattern == part or part.startswith(pattern + "/"):
+                return True
+
+    # Exclude hidden files/directories (starting with .)
+    # But allow specific ones like .gitignore, .github, etc.
+    allowed_hidden = {
+        ".github",
+        ".gitlab",
+        ".gitignore",
+        ".gitattributes",
+        ".editorconfig",
+        ".codegraph",
+    }
+    for part in parts:
+        if part.startswith(".") and part not in allowed_hidden:
+            # Only exclude if it's a directory or not explicitly allowed
+            # Allow files like .gitignore
+            if file_path.is_dir():
+                return True
+            # For files, only exclude common hidden files
+            if part not in {".gitignore", ".gitattributes", ".editorconfig"}:
+                return True
+
+    return False
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     """Initialize CodeGrapher in a repository."""
     root = find_root()
@@ -122,6 +218,10 @@ def cmd_build(args: argparse.Namespace) -> None:
     print("\nFinding Python files...")
     py_files = list(root.rglob("*.py"))
 
+    # Filter out excluded paths (virtual environments, caches, etc.)
+    py_files = [f for f in py_files if not _should_exclude_path(f, root)]
+
+    # Filter out manually excluded files from secrets scanning
     excluded_file = index_dir / "excluded_files.txt"
     if excluded_file.exists():
         excluded = set(excluded_file.read_text().strip().split("\n"))

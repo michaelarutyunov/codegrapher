@@ -62,8 +62,12 @@ class EmbeddingModel:
 
         try:
             logger.info(f"Loading embedding model: {MODEL_NAME}")
-            self._tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-            self._model = AutoModel.from_pretrained(MODEL_NAME)
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                MODEL_NAME, trust_remote_code=True
+            )
+            self._model = AutoModel.from_pretrained(
+                MODEL_NAME, trust_remote_code=True
+            )
             self._model.eval()  # type: ignore[attr-defined]  # AutoModel has eval() but stubs are incomplete
             logger.info("Model loaded successfully")
         except Exception as e:

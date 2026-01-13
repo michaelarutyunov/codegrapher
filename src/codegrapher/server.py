@@ -33,8 +33,56 @@ DEFAULT_MAX_DEPTH = 1
 VECTOR_K = 20  # Number of results from vector search
 STALE_INDEX_SECONDS = 3600  # 1 hour
 
+# PageRank cache: maps index_path -> (scores_dict, last_modified_time)
+_pagerank_cache: dict[Path, tuple[dict[str, float], datetime]] = {}
+
 # Initialize FastMCP server
 mcp = FastMCP(name="codegrapher")
+
+
+def _load_pagerank_scores(db: Database) -> dict[str, float]:
+    """Load PageRank scores from database or cache.
+
+    Computes PageRank scores on first call and caches them for subsequent calls.
+    Cache is invalidated when the index is modified (checked via last_indexed time).
+
+    Args:
+        db: Database instance
+
+    Returns:
+        Dictionary mapping symbol_id to PageRank score (normalized 0-1)
+    """
+    global _pagerank_cache
+
+    # Get database path for cache key
+    db_path = db.db_path
+
+    # Check if we have cached scores
+    cached_scores, cache_time = _pagerank_cache.get(db_path, ({}, datetime.min))
+
+    # Get last indexed time from database
+    last_indexed_str = db.get_meta("last_indexed")
+    last_indexed = datetime.fromisoformat(last_indexed_str) if last_indexed_str else datetime.min
+
+    # Return cached scores if still valid
+    if cached_scores and cache_time >= last_indexed:
+        logger.debug(f"Using cached PageRank scores ({len(cached_scores)} symbols)")
+        return cached_scores
+
+    # Compute fresh PageRank scores
+    from codegrapher.graph import compute_pagerank
+
+    logger.info("Computing PageRank scores...")
+    scores = compute_pagerank(db)
+
+    if scores:
+        logger.info(f"Computed PageRank for {len(scores)} symbols")
+        # Cache the scores
+        _pagerank_cache[db_path] = (scores, datetime.now())
+    else:
+        logger.warning("No PageRank scores computed (no call edges found)")
+
+    return scores
 
 
 def find_repo_root() -> Optional[Path]:
@@ -425,7 +473,7 @@ def codegraph_query(
 
     # Step 5: Compute weighted scores
     try:
-        pagerank = {}  # TODO: Load cached PageRank scores
+        pagerank = _load_pagerank_scores(db)
         git_log_data = get_git_log(repo_root)
         scored = compute_weighted_scores(candidates, query_embedding, pagerank, git_log_data)
     except Exception as e:

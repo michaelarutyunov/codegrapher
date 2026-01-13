@@ -209,4 +209,10 @@ __marimo__/
 
 # Custom
 .claude/
+debug/
 prompt.txt
+
+# Phase 12 Evaluation
+fixtures/test_repos/eval_repos/
+fixtures/eval_results.json
+fixtures/eval_report.md

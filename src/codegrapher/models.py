@@ -4,6 +4,7 @@ This module defines Pydantic models for in-memory validation and SQLite
 persistence for the code graph index.
 """
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,10 +109,35 @@ class Database:
         self._conn: Optional[sqlite3.Connection] = None
 
     def connect(self) -> sqlite3.Connection:
-        """Get or create SQLite connection."""
+        """Get or create SQLite connection.
+
+        Ensures database directory exists and has proper write permissions.
+        Opens database in read-write mode using URI to prevent readonly issues.
+        """
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path)
-            self._conn.row_factory = sqlite3.Row
+            # Ensure parent directory exists and is writable
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Check if directory is writable
+            if not os.access(self.db_path.parent, os.W_OK):
+                # Try to fix permissions
+                try:
+                    os.chmod(self.db_path.parent, 0o755)
+                except (OSError, PermissionError) as e:
+                    raise PermissionError(
+                        f"Cannot write to database directory {self.db_path.parent}: {e}"
+                    )
+
+            # Use URI mode to explicitly open in read-write mode
+            db_uri = f"file:{self.db_path}?mode=rw"
+            try:
+                self._conn = sqlite3.connect(db_uri, uri=True)
+            except sqlite3.OperationalError:
+                # Database doesn't exist yet, create it
+                self._conn = sqlite3.connect(self.db_path)
+                self._conn.row_factory = sqlite3.Row
+            else:
+                self._conn.row_factory = sqlite3.Row
         return self._conn
 
     def close(self) -> None:
