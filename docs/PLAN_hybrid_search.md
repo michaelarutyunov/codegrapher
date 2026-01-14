@@ -1,9 +1,75 @@
 # Hybrid Retrieval Implementation Plan
 
-**Status:** 🔄 In Progress
+**Status:** ✅ Phase 1 Complete | ⚠️ Phase 2 Partial | 📋 Phase 3 Pending
 **Created:** 2026-01-14
+**Last Updated:** 2026-01-14
 **Author:** CodeGrapher Team
 **Related:** [PLAN_v1.md](PLAN_v1.md) (completed), [PROGRESS.md](PROGRESS.md) (tracking)
+
+---
+
+## Implementation Status Summary
+
+### Completed (2026-01-14)
+
+**Phase 1: Minimal Viable Hybrid** ✅ COMPLETE
+- ✅ 1.0 Query preprocessing (noise filtering)
+- ✅ 1.1 rank-bm25 dependency added
+- ✅ 1.2 SparseIndex class implemented
+- ✅ 1.3 BM25Searcher class implemented
+- ✅ 1.4 Tokenization + filename matching
+- ✅ 1.5 RRF-based merge (instead of simple score-based)
+- ✅ 1.6 Updated codegraph_query with hybrid pipeline
+- ✅ 1.7 A/B Test on 4-task pretest (ground_truth_pretest.jsonl)
+
+**Phase 2: Production Hardening** ⚠️ MOSTLY COMPLETE
+- ✅ 2.2 Sparse index builds during indexing
+- ✅ 2.3 Sparse index loads at startup
+- ✅ 2.4 RRF merge implemented (k=60)
+- ✅ 2.5 Test-source pairing logic
+- ✅ 2.6 Advanced tokenization (CamelCase, dotted.module, ALL_CAPS, etc.)
+- ⚠️ 2.1 sparse_terms table (deferred - using in-memory tokenization)
+- ⏳ 2.7 Full A/B Test (pending - needs full ground_truth.jsonl run)
+
+**Phase 3: Optimization** 📋 NOT STARTED
+- ⏳ 3.1 Query latency baseline measurement
+- ⏳ 3.2 Parallel search (conditional on latency >80ms)
+- ⏳ 3.3 Weight tuning (if needed)
+- ⏳ 3.4 Final A/B Test
+
+### Critical Bug Fixes Applied
+
+1. **Import Closure Pruning (server.py:660)**
+   - Problem: Filename-matched symbols pruned when not in import closure
+   - Fix: Preserve filename-matched symbols regardless of import closure
+   - Impact: task_032 improved 0% → 75% recall
+
+2. **Case Sensitivity (sparse_index.py:311)**
+   - Problem: "TestClient" didn't match "testclient.py"
+   - Fix: Case-insensitive filename matching
+   - Impact: task_040 improved 0% → 50% recall
+
+3. **Cursor File Priority (server.py:644-657)**
+   - Problem: Semantic search fails to find cursor file itself
+   - Fix: Defensive inclusion of cursor file when not already present
+   - Impact: task_039 improved 0% → 50% recall
+
+### Pretest Results (4 tasks)
+
+| Task | Description | Before | After | Fix |
+|------|-------------|--------|-------|-----|
+| task_032 | Move utils to client | 0% | 75% | Import closure pruning |
+| task_039 | async http_exception | 0% | 50% | Cursor file priority |
+| task_040 | TestClient timeout | 0% | 50% | Case sensitivity |
+| task_028 | compile_templates | 0% | 0% | *Still failing* |
+
+### Remaining Work
+
+1. **Full A/B Test** (Step 2.7): Run on complete ground_truth.jsonl dataset
+2. **task_028 Root Cause**: Semantic gap requires stemming or fuzzy matching
+3. **Phase 3**: Performance measurement and optimization
+
+---
 
 ---
 
@@ -562,3 +628,8 @@ def augment_with_test_source_pairs(
   - Added underscore-prefixed module tokenization (pattern #4 in tokenization)
   - Updated ground truth table with real evaluation data (tasks 028, 032, 039, 040, 006)
   - Changed parallel search to conditional (measure first, implement if >80ms median)
+- 2026-01-14: **PHASE 1 COMPLETE** - Implementation finished with three critical bug fixes:
+  - Import closure pruning: Preserve filename-matched symbols (task_032: 0%→75%)
+  - Case sensitivity: Case-insensitive filename matching (task_040: 0%→50%)
+  - Cursor file priority: Defensive cursor file inclusion (task_039: 0%→50%)
+  - Deferred sparse_terms table (using in-memory tokenization instead)

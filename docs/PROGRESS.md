@@ -1084,9 +1084,9 @@ python scripts/benchmark.py --loc 5000
 
 ## Phase 12: Testing & Evaluation
 
-**Status:** 🔄 IN PROGRESS (Initial validation complete; further tests due)
+**Status:** 🔄 IN PROGRESS (Initial validation complete; hybrid search Phase 1 complete; further tests due)
 
-**Last Updated:** 2026-01-13 (Recall recovered to 100% after embedding model fix; appendable report format added; further tests pending)
+**Last Updated:** 2026-01-14 (Hybrid search Phase 1 complete with 3 critical bug fixes; task_028 still failing)
 
 ### Implementation Summary
 
@@ -1177,6 +1177,39 @@ Created comprehensive evaluation infrastructure to verify CodeGrapher meets its 
    - URI mode with explicit read-write access
    - Automatic permission correction (chmod 0o755)
    - Graceful fallback for new databases
+
+8. **Hybrid Retrieval Implementation (Phase 12.5):**
+   - **Status:** ✅ Phase 1 Complete | ⚠️ Phase 2 Partial | 📋 Phase 3 Pending
+   - **Purpose:** Improve recall when semantic search fails by adding BM25 sparse search
+   - **Implementation:** Combined dense (FAISS) + sparse (BM25) search with Reciprocal Rank Fusion (RRF)
+   - **Files Created:**
+     - `src/codegrapher/sparse_index.py` (315 LOC) - BM25Searcher, SparseIndex, tokenization
+     - `docs/PLAN_hybrid_search.md` - Implementation plan with 3 phases
+     - `fixtures/ground_truth_pretest.jsonl` - 4-task pretest for regression testing
+   - **Files Modified:**
+     - `src/codegrapher/server.py` (+265 LOC) - Hybrid pipeline, RRF merge, test-source pairing
+     - `pyproject.toml` (+1 dependency) - rank-bm25>=0.2.2
+   - **Key Features:**
+     - Query preprocessing: Removes noise terms ("e.g", "i.e") while preserving technical keywords
+     - Advanced tokenization: CamelCase, snake_case, dotted.modules, ALL_CAPS, underscore-prefixed modules
+     - Filename matching: Augments sparse results with symbols from .py files in query
+     - Test-source pairing: Includes source files when cursor is in test file
+     - RRF merging: k=60 constant for robust score-scale invariant fusion
+   - **Critical Bug Fixes:**
+     1. **Import Closure Pruning (server.py:660):** Filename-matched symbols were incorrectly pruned when not in import closure. Fixed by preserving filename-matched symbols regardless of import closure. Impact: task_032 improved 0% → 75% recall.
+     2. **Case Sensitivity (sparse_index.py:311):** "TestClient" didn't match "testclient.py". Fixed with case-insensitive comparison. Impact: task_040 improved 0% → 50% recall.
+     3. **Cursor File Priority (server.py:644-657):** Semantic search fails to find cursor file itself. Added defensive inclusion logic. Impact: task_039 improved 0% → 50% recall.
+   - **Pretest Results (4 tasks):**
+     | Task | Description | Before | After | Fix Applied |
+     |------|-------------|--------|-------|-------------|
+     | task_032 | Move utils to client | 0% | 75% | Import closure pruning |
+     | task_039 | async http_exception | 0% | 50% | Cursor file priority |
+     | task_040 | TestClient timeout | 0% | 50% | Case sensitivity |
+     | task_028 | compile_templates | 0% | 0% | *Still failing* |
+   - **Remaining Challenge (task_028):** Query "compile_templates" doesn't match "compiler.py" due to morphological gap. Requires stemming/lemmatization or fuzzy matching (Phase 3).
+   - **Dependencies:** rank-bm25>=0.2.2
+   - **Plan:** See `docs/PLAN_hybrid_search.md` for complete 3-phase implementation plan
+   - **Commit:** `229249d` - "feat(phase-12): implement hybrid retrieval with BM25 sparse search and RRF fusion"
 
 ### Deviations from PRD/Engineering Guidelines
 
@@ -1327,8 +1360,11 @@ python scripts/eval_token_save.py --ground-truth custom.jsonl --output-report re
 6. **✅ COMPLETED: task_001 Validation** - Rebuilt index with all fixes, achieved 100% recall
 7. **✅ COMPLETED: Appendable Report Format** - Added `--appendable` flag for incremental evaluation results
 8. **✅ COMPLETED: Path-Finding Fix** - Fixed subprocess codegraph command resolution in eval script
-9. **🔄 DUE: Further Tests** - Run remaining 4 tasks in `fixtures/ground_truth_partial.jsonl` (task_002, task_003, task_005, task_011)
-10. **📋 PENDING: Full Evaluation** - Run complete evaluation suite on all 20 tasks and generate final report
+9. **✅ COMPLETED: Hybrid Search Phase 1** - Implemented BM25 sparse search with RRF fusion; 3/4 pretest tasks improved (0%→50-75%)
+10. **🔄 DUE: Hybrid Search Phase 2** - Complete production hardening and run full A/B test on all ground_truth.jsonl
+11. **🔄 DUE: task_028 Root Cause Analysis** - Add debug logging and assess stemming vs fuzzy matching
+12. **📋 PENDING: Further Tests** - Run remaining tasks in ground_truth.jsonl
+13. **📋 PENDING: Full Evaluation** - Run complete evaluation suite on all 20 tasks and generate final report
 
 **Note:** Additional single-task evaluations are recommended to validate consistency across different repositories and task types. Each task should be run independently with WSL refresh between runs to avoid memory issues.
 
