@@ -149,7 +149,7 @@ class Database:
     def initialize(self) -> None:
         """Create database schema if tables don't exist.
 
-        Creates symbols, edges, and index_meta tables per PRD Section 7.
+        Creates symbols, edges, index_meta, and sparse_terms tables.
         """
         conn = self.connect()
         conn.executescript("""
@@ -178,6 +178,12 @@ class Database:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS sparse_terms (
+                symbol_id TEXT NOT NULL,
+                token TEXT NOT NULL,
+                FOREIGN KEY (symbol_id) REFERENCES symbols(id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_symbols_file
                 ON symbols(file);
 
@@ -186,6 +192,12 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_edges_callee
                 ON edges(callee_id);
+
+            CREATE INDEX IF NOT EXISTS idx_sparse_terms_token
+                ON sparse_terms(token);
+
+            CREATE INDEX IF NOT EXISTS idx_sparse_terms_symbol_id
+                ON sparse_terms(symbol_id);
         """)
         conn.commit()
 
@@ -401,6 +413,111 @@ class Database:
             return True
         except sqlite3.DatabaseError:
             return False
+
+    def insert_sparse_terms(self, symbol_id: str, tokens: List[str]) -> None:
+        """Insert tokenized terms for sparse BM25 search.
+
+        Args:
+            symbol_id: Symbol ID to associate tokens with
+            tokens: List of tokenized terms for the symbol
+        """
+        if not tokens:
+            return
+
+        conn = self.connect()
+        # Delete existing terms for this symbol (in case of re-indexing)
+        conn.execute("DELETE FROM sparse_terms WHERE symbol_id = ?", (symbol_id,))
+        # Insert new terms
+        conn.executemany(
+            "INSERT INTO sparse_terms (symbol_id, token) VALUES (?, ?)",
+            [(symbol_id, token) for token in set(tokens)]  # Use set to deduplicate
+        )
+        conn.commit()
+
+    def insert_sparse_terms_batch(
+        self, symbol_tokens: dict[str, List[str]]
+    ) -> None:
+        """Insert sparse terms for multiple symbols in a single transaction.
+
+        Args:
+            symbol_tokens: Dictionary mapping symbol_id to list of tokens
+        """
+        if not symbol_tokens:
+            return
+
+        conn = self.connect()
+        # Batch insert all terms
+        terms_to_insert = []
+        for symbol_id, tokens in symbol_tokens.items():
+            for token in set(tokens):  # Deduplicate tokens per symbol
+                terms_to_insert.append((symbol_id, token))
+
+        conn.executemany(
+            "INSERT OR REPLACE INTO sparse_terms (symbol_id, token) VALUES (?, ?)",
+            terms_to_insert
+        )
+        conn.commit()
+
+    def get_sparse_terms_for_symbol(self, symbol_id: str) -> List[str]:
+        """Get all sparse terms for a specific symbol.
+
+        Args:
+            symbol_id: Symbol ID to get terms for
+
+        Returns:
+            List of tokens associated with the symbol
+        """
+        conn = self.connect()
+        rows = conn.execute(
+            "SELECT token FROM sparse_terms WHERE symbol_id = ?",
+            (symbol_id,)
+        ).fetchall()
+        return [row["token"] for row in rows]
+
+    def get_all_sparse_terms(self) -> dict[str, List[str]]:
+        """Get all sparse terms indexed by symbol ID.
+
+        Returns:
+            Dictionary mapping symbol_id to list of tokens
+        """
+        conn = self.connect()
+        rows = conn.execute("SELECT symbol_id, token FROM sparse_terms").fetchall()
+
+        result: dict[str, List[str]] = {}
+        for row in rows:
+            symbol_id = row["symbol_id"]
+            token = row["token"]
+            if symbol_id not in result:
+                result[symbol_id] = []
+            result[symbol_id].append(token)
+
+        return result
+
+    def delete_sparse_terms(self, symbol_id: str) -> None:
+        """Delete sparse terms for a specific symbol.
+
+        Args:
+            symbol_id: Symbol ID to delete terms for
+        """
+        conn = self.connect()
+        conn.execute("DELETE FROM sparse_terms WHERE symbol_id = ?", (symbol_id,))
+        conn.commit()
+
+    def delete_sparse_terms_batch(self, symbol_ids: List[str]) -> None:
+        """Delete sparse terms for multiple symbols in a single transaction.
+
+        Args:
+            symbol_ids: List of symbol IDs to delete terms for
+        """
+        if not symbol_ids:
+            return
+
+        conn = self.connect()
+        conn.executemany(
+            "DELETE FROM sparse_terms WHERE symbol_id = ?",
+            [(sid,) for sid in symbol_ids]
+        )
+        conn.commit()
 
     @staticmethod
     def _row_to_symbol(row: sqlite3.Row) -> Symbol:

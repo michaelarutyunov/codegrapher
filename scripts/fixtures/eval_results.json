@@ -1,0 +1,125 @@
+{
+  "results": [
+    {
+      "task_id": "task_028",
+      "description": "non-deterministic output from compile templates when using tuple unpacking",
+      "repo": "https://github.com/pallets/jinja",
+      "baseline_tokens": 181481,
+      "cg_tokens": 62097,
+      "token_savings_pct": 65.78319493500697,
+      "recall": 0.5,
+      "precision": 0.125,
+      "files_returned": 8,
+      "files_edited": 2,
+      "files_overlap": 1,
+      "returned_files": [
+        "tests/test_regression.py",
+        "tests/test_ext.py",
+        "tests/test_core_tags.py",
+        "tests/test_async.py",
+        "src/jinja2/environment.py",
+        "tests/test_loader.py",
+        "src/jinja2/compiler.py",
+        "src/jinja2/utils.py"
+      ],
+      "expected_files": [
+        "src/jinja2/compiler.py",
+        "tests/test_compile.py"
+      ]
+    },
+    {
+      "task_id": "task_032",
+      "description": "Move utility functions from _utils.py to _client.py",
+      "repo": "https://github.com/encode/httpx",
+      "baseline_tokens": 132664,
+      "cg_tokens": 29639,
+      "token_savings_pct": 77.65859615268648,
+      "recall": 1.0,
+      "precision": 0.36363636363636365,
+      "files_returned": 11,
+      "files_edited": 4,
+      "files_overlap": 4,
+      "returned_files": [
+        "tests/client/test_client.py",
+        "tests/client/test_properties.py",
+        "httpx/_client.py",
+        "tests/client/test_queryparams.py",
+        "tests/test_utils.py",
+        "tests/client/test_headers.py",
+        "httpx/__init__.py",
+        "tests/client/test_async_client.py",
+        "httpx/_exceptions.py",
+        "httpx/_utils.py",
+        "httpx/_config.py"
+      ],
+      "expected_files": [
+        "httpx/_client.py",
+        "httpx/_utils.py",
+        "tests/client/test_headers.py",
+        "tests/test_utils.py"
+      ]
+    },
+    {
+      "task_id": "task_039",
+      "description": "Mark http_exception as async to prevent thread creation.",
+      "repo": "https://github.com/encode/starlette",
+      "baseline_tokens": 137770,
+      "cg_tokens": 28977,
+      "token_savings_pct": 78.96711911156274,
+      "recall": 0.5,
+      "precision": 0.07692307692307693,
+      "files_returned": 13,
+      "files_edited": 2,
+      "files_overlap": 1,
+      "returned_files": [
+        "tests/test_applications.py",
+        "starlette/types.py",
+        "tests/test__utils.py",
+        "tests/test_testclient.py",
+        "starlette/middleware/exceptions.py",
+        "tests/middleware/test_wsgi.py",
+        "starlette/applications.py",
+        "tests/test_background.py",
+        "starlette/exceptions.py",
+        "tests/test_routing.py",
+        "tests/test_websockets.py",
+        "starlette/_exception_handler.py",
+        "starlette/_utils.py"
+      ],
+      "expected_files": [
+        "starlette/middleware/exceptions.py",
+        "tests/test_exceptions.py"
+      ]
+    },
+    {
+      "task_id": "task_040",
+      "description": "TestClient.request does not honor timeout",
+      "repo": "https://github.com/encode/starlette",
+      "baseline_tokens": 135481,
+      "cg_tokens": 27527,
+      "token_savings_pct": 79.68202183331981,
+      "recall": 0.5,
+      "precision": 0.1111111111111111,
+      "files_returned": 9,
+      "files_edited": 2,
+      "files_overlap": 1,
+      "returned_files": [
+        "tests/test_routing.py",
+        "tests/test_applications.py",
+        "tests/test_background.py",
+        "tests/test__utils.py",
+        "tests/test_endpoints.py",
+        "starlette/testclient.py",
+        "tests/test_exceptions.py",
+        "tests/test_schemas.py",
+        "starlette/requests.py"
+      ],
+      "expected_files": [
+        "starlette/testclient.py",
+        "tests/test_testclient.py"
+      ]
+    }
+  ],
+  "mode": "simulate",
+  "api_tasks": null
+}

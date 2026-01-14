@@ -208,7 +208,7 @@ __marimo__/
 
 
 # Custom
-.claude/
+# .claude/
 debug/
 prompt.txt
 

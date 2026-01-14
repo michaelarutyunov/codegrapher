@@ -26,6 +26,7 @@ from codegrapher.sparse_index import (
     BM25Searcher,
     SparseIndex,
     augment_with_filename_matches,
+    tokenize_compound_word,
 )
 from codegrapher.vector_store import EmbeddingModel, FAISSIndexManager
 
@@ -574,9 +575,19 @@ def codegraph_query(
 
     # DEBUG: Log query preprocessing for morphological gap analysis (task_028)
     query_tokens = cleaned_query.split()
+
+    # Apply compound word splitting to query tokens
+    # This enables "compile_templates" → ["compile_templates", "compile", "templates"]
+    expanded_query_tokens = []
+    for token in query_tokens:
+        compound_tokens = tokenize_compound_word(token)
+        expanded_query_tokens.extend(compound_tokens)
+
+    query_tokens = expanded_query_tokens
+
     logger.debug(f"[task_028-debug] Original query: '{query}'")
     logger.debug(f"[task_028-debug] Cleaned query: '{cleaned_query}'")
-    logger.debug(f"[task_028-debug] Query tokens: {query_tokens}")
+    logger.debug(f"[task_028-debug] Query tokens after compound splitting: {query_tokens}")
 
     # Step 2: Generate query embedding
     try:
@@ -644,12 +655,12 @@ def codegraph_query(
             scored = []
             for symbol in all_symbols:
                 text = f"{symbol.id} {symbol.signature} {symbol.doc or ''}".lower()
-                if query_lower in text:
+                # Check if any query token (including compound-split components) matches
+                if any(token.lower() in text for token in query_tokens):
                     scored.append((symbol, 0.5))  # Neutral score
             scored.sort(key=lambda x: x[1], reverse=True)
             candidates = [s for s, _ in scored[:20]]
-            # Also perform filename matching for fallback
-            query_tokens = cleaned_query.split()
+            # Also perform filename matching for fallback (query_tokens already compound-split)
             filename_matched_ids = augment_with_filename_matches(
                 query_tokens, all_symbols, set(s.id for s in candidates)
             )

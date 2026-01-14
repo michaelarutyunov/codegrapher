@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from codegrapher.models import Database, Symbol
+from codegrapher.sparse_index import tokenize_symbol
 from codegrapher.vector_store import FAISSIndexManager
 
 
@@ -462,6 +463,7 @@ def apply_diff(
     """Apply a SymbolDiff to the database and FAISS index.
 
     Deletes old symbols, inserts new symbols, and updates modified symbols.
+    Also builds and stores sparse terms for BM25 search.
     Must be called within an atomic_update context.
 
     Args:
@@ -472,6 +474,7 @@ def apply_diff(
     # Delete old symbols
     if diff.deleted:
         db.delete_symbols_batch(diff.deleted)
+        db.delete_sparse_terms_batch(diff.deleted)
 
     # Delete from FAISS
     if diff.deleted:
@@ -482,6 +485,14 @@ def apply_diff(
         for symbol in diff.added:
             db.insert_symbol(symbol)
 
+    # Build and store sparse terms for new symbols
+    if diff.added:
+        sparse_terms: dict[str, List[str]] = {}
+        for symbol in diff.added:
+            tokens = tokenize_symbol(symbol)
+            sparse_terms[symbol.id] = tokens
+        db.insert_sparse_terms_batch(sparse_terms)
+
     # Add to FAISS
     if diff.added:
         faiss_manager.add_symbols(diff.added)
@@ -490,6 +501,14 @@ def apply_diff(
     if diff.modified:
         for symbol in diff.modified:
             db.update_symbol(symbol)
+
+    # Update sparse terms for modified symbols
+    if diff.modified:
+        sparse_terms: dict[str, List[str]] = {}
+        for symbol in diff.modified:
+            tokens = tokenize_symbol(symbol)
+            sparse_terms[symbol.id] = tokens
+        db.insert_sparse_terms_batch(sparse_terms)
 
     # Update in FAISS (requires remove + add for IndexFlatL2)
     if diff.modified:

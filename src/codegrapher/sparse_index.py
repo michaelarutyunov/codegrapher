@@ -25,6 +25,63 @@ BM25_B = 0.75  # Length normalization
 BM25_EPSILON = 0.25  # Floor for IDF values
 
 
+def tokenize_compound_word(identifier: str) -> List[str]:
+    """Split compound identifier into component tokens.
+
+    Handles underscore-separated, hyphen-separated, and CamelCase
+    identifiers. Preserves original identifier for exact matching.
+
+    Args:
+        identifier: Single token (word, identifier, filename component)
+
+    Returns:
+        List of tokens including original and split components
+
+    Examples:
+        >>> tokenize_compound_word("compile_templates")
+        ["compile_templates", "compile", "templates"]
+        >>> tokenize_compound_word("TestClient")
+        ["TestClient", "Test", "Client"]
+        >>> tokenize_compound_word("simple")
+        ["simple"]
+    """
+    if len(identifier) <= 2:
+        return [identifier]  # Skip single-char tokens
+
+    tokens = [identifier]  # Always preserve original
+
+    # Rule 1: Underscore and hyphen splitting
+    underscore_parts = re.split(r'[-_\s]', identifier)
+    if len(underscore_parts) > 1:
+        tokens.extend(underscore_parts)
+
+    # Rule 2: CamelCase splitting (apply to each part from Rule 1)
+    for part in underscore_parts:
+        # Match: Capital letter followed by lowercase, OR all caps
+        # Examples:
+        #   "FloatOperation" -> ["Float", "Operation"]
+        #   "HTTPServer" -> ["HTTP", "Server"]
+        #   "parseXML" -> ["parse", "XML"]  # NOTE: Won't split this perfectly
+        camel_parts = re.findall(r'[A-Z]?[a-z0-9]+|[A-Z]+(?=[A-Z]|$)', part)
+        if len(camel_parts) > 1:
+            tokens.extend(camel_parts)
+
+    # Rule 3: Handle edge case - single underscore
+    if identifier == '_':
+        return ['_']
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique_tokens = []
+    for t in tokens:
+        t_lower = t.lower()
+        if len(t) > 2 and t_lower not in seen:
+            seen.add(t_lower)
+            unique_tokens.append(t)
+
+    return unique_tokens
+
+
 def tokenize_symbol(symbol: Symbol) -> List[str]:
     """Extract searchable tokens from a symbol.
 
@@ -37,7 +94,13 @@ def tokenize_symbol(symbol: Symbol) -> List[str]:
     6. Decorators (e.g., "@property", "@staticmethod")
     7. Underscore-prefixed modules from filename (e.g., "_utils")
     8. Alphanumeric words (3+ chars)
-    9. Docstring tokens (first 200 chars)
+    9. Compound word splitting: compile_templates -> compile, templates
+    10. Docstring tokens (first 200 chars)
+
+    Compound word splitting (pattern 9) is applied to all alphanumeric tokens
+    and docstring words, enabling partial matching for multi-word identifiers.
+    This handles underscore-separated (compile_templates), hyphen-separated
+    (chunk-boundary), and CamelCase (FloatOperation) patterns.
 
     Args:
         symbol: Symbol to tokenize
@@ -66,8 +129,14 @@ def tokenize_symbol(symbol: Symbol) -> List[str]:
     # Matches: HTTP, API, DEFAULT_PORT, MAX_RETRIES
     tokens.extend(re.findall(r"\b[A-Z]{2,}[A-Z0-9_]*\b", symbol.signature))
 
-    # 4. snake_case symbols
-    tokens.extend(re.findall(r"\b[a-z][a-z_0-9]*_[a-z][a-z_0-9]*\b", symbol.signature))
+    # 4. snake_case and compound identifiers (underscores/hyphens)
+    # Matches: compile_templates, stream_with_context, chunk-boundary
+    compound_patterns = re.findall(r"\b[a-zA-Z][a-zA-Z0-9]*[-_][a-zA-Z0-9_]+\b", symbol.signature)
+    tokens.extend(compound_patterns)
+    # Apply compound word splitting to these patterns
+    for pattern in compound_patterns:
+        compound_tokens = tokenize_compound_word(pattern)
+        tokens.extend(compound_tokens)
 
     # 5. Type annotations - extract generic types and inner types
     # "List[str]" -> "List", "str"
@@ -94,11 +163,23 @@ def tokenize_symbol(symbol: Symbol) -> List[str]:
     tokens.extend(re.findall(r"\b_[a-z][a-z_0-9]*\b", symbol.file))
 
     # 8. Alphanumeric words (3+ chars)
-    tokens.extend(re.findall(r"\b[a-zA-Z]{3,}\b", symbol.signature))
+    words = re.findall(r"\b[a-zA-Z]{3,}\b", symbol.signature)
+    tokens.extend(words)
+
+    # 8.5. Compound word splitting for all words
+    # Apply compound word splitting to extract component tokens
+    for word in words:
+        compound_tokens = tokenize_compound_word(word)
+        tokens.extend(compound_tokens)
 
     # 9. Docstring tokens (if present)
     if symbol.doc:
-        tokens.extend(re.findall(r"\b[a-zA-Z]{3,}\b", symbol.doc[:200]))
+        doc_words = re.findall(r"\b[a-zA-Z]{3,}\b", symbol.doc[:200])
+        tokens.extend(doc_words)
+        # Also split compound words in docstrings
+        for word in doc_words:
+            compound_tokens = tokenize_compound_word(word)
+            tokens.extend(compound_tokens)
 
     # Deduplicate and filter
     seen = set()
