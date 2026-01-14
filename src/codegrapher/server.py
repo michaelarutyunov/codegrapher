@@ -22,6 +22,11 @@ from fastmcp import FastMCP
 
 from codegrapher.models import Database, Symbol
 from codegrapher.resolver import get_import_closure
+from codegrapher.sparse_index import (
+    BM25Searcher,
+    SparseIndex,
+    augment_with_filename_matches,
+)
 from codegrapher.vector_store import EmbeddingModel, FAISSIndexManager
 
 
@@ -32,6 +37,43 @@ DEFAULT_TOKEN_BUDGET = 3500
 DEFAULT_MAX_DEPTH = 1
 VECTOR_K = 20  # Number of results from vector search
 STALE_INDEX_SECONDS = 3600  # 1 hour
+
+# RRF constant (from research: k=60 works well for most cases)
+RRF_K = 60
+
+# Noise terms for query preprocessing (conservative list)
+FILLER_TERMS = {
+    'e.g', 'i.e', 'etc', 'eg', 'ie', 'aka',
+    'please', 'thanks', 'help', 'github', 'issue'
+}
+
+
+def preprocess_query(query: str) -> str:
+    """Remove noise terms while preserving technical keywords.
+
+    Conservative filtering removes only non-technical filler terms that
+    dilute search signal. Valid code terms like 'async', 'function',
+    'class' are preserved.
+
+    Args:
+        query: Raw query string
+
+    Returns:
+        Cleaned query with noise terms removed
+
+    Examples:
+        >>> preprocess_query("e.g. fix async function KeyError in importlib")
+        'fix async function KeyError importlib'
+    """
+    words = query.split()
+    cleaned = []
+    for w in words:
+        # Strip trailing punctuation for comparison
+        word_stripped = w.rstrip('.,;:!?)')
+        word_lower = word_stripped.lower()
+        if word_lower not in FILLER_TERMS:
+            cleaned.append(w)
+    return ' '.join(cleaned)
 
 # PageRank cache: maps index_path -> (scores_dict, last_modified_time)
 _pagerank_cache: dict[Path, tuple[dict[str, float], datetime]] = {}
@@ -309,6 +351,134 @@ def get_git_log(repo_root: Path) -> dict[str, datetime]:
     return git_log
 
 
+def is_test_source_pair(test_file: str, source_file: str) -> bool:
+    """Check if two files are test-source pairs.
+
+    Supports three common patterns:
+    1. test_ prefix in same directory (test_mypath.py ↔ mypath.py)
+    2. tests/ mirrors src/ structure (tests/mypath.py ↔ src/mypath.py)
+    3. _test.py suffix (mypath_test.py ↔ mypath.py)
+
+    Args:
+        test_file: Path to the test file
+        source_file: Path to the source file
+
+    Returns:
+        True if files are test-source pairs, False otherwise
+
+    Examples:
+        >>> is_test_source_pair("test_pathlib.py", "pathlib.py")
+        True
+        >>> is_test_source_pair("tests/test_pathlib.py", "src/pathlib.py")
+        True
+        >>> is_test_source_pair("pathlib_test.py", "pathlib.py")
+        True
+        >>> is_test_source_pair("main.py", "utils.py")
+        False
+    """
+    # Normalize paths for comparison
+    test_norm = test_file.replace("\\", "/")
+    source_norm = source_file.replace("\\", "/")
+
+    # Pattern 1: test_ prefix in same directory
+    if test_norm == f"test_{source_norm}":
+        return True
+
+    # Pattern 2: tests/ mirrors src/ structure
+    if test_norm.startswith("tests/") and source_norm.startswith("src/"):
+        test_suffix = test_norm.replace("tests/", "").replace("test_", "")
+        source_suffix = source_norm.replace("src/", "")
+        if test_suffix == source_suffix or test_suffix == f"test_{source_suffix}":
+            return True
+
+    # Pattern 3: _test.py suffix
+    if test_norm == f"{source_norm}_test":
+        return True
+
+    return False
+
+
+def augment_with_test_source_pairs(
+    cursor_file: str,
+    candidates: list[Symbol],
+    all_symbols: list[Symbol],
+) -> list[Symbol]:
+    """If cursor is in test file, include corresponding source files.
+
+    Import closure is unidirectional (test → imports), missing the
+    source → test relationship. This function adds source files when
+    the cursor is in a test file.
+
+    Args:
+        cursor_file: Path to the file containing the cursor
+        candidates: Current candidate symbols from import closure
+        all_symbols: All symbols in the index
+
+    Returns:
+        Augmented list of symbols including source files
+
+    Examples:
+        >>> # Cursor in test_pathlib.py, candidates only have test symbols
+        >>> augmented = augment_with_test_source_pairs("test_pathlib.py", candidates, all_symbols)
+        >>> # Now includes symbols from src/pathlib.py
+    """
+    # Only augment if cursor is in a test file
+    if "test" not in cursor_file.lower():
+        return candidates
+
+    candidate_files = {s.file for s in candidates}
+    augmented = list(candidates)
+
+    for symbol in all_symbols:
+        if symbol.file in candidate_files:
+            continue
+        if is_test_source_pair(cursor_file, symbol.file):
+            augmented.append(symbol)
+
+    return augmented
+
+
+def merge_dense_sparse_results(
+    dense_results: list[tuple[str, float]],
+    sparse_results: list[tuple[str, float]],
+) -> list[tuple[str, float]]:
+    """Merge dense and sparse search results using Reciprocal Rank Fusion (RRF).
+
+    RRF is rank-based and score-scale invariant:
+        RRF_score(item) = Σ (k / (k + rank_position))
+
+    Where k = 60 (RFF_K constant), rank = 1, 2, 3, ...
+
+    Advantages over weighted averaging:
+    - No score normalization needed
+    - Works with different scoring systems
+    - Handles items in only one ranking
+    - Proven robust in research
+
+    Args:
+        dense_results: List of (symbol_id, cosine_sim) from FAISS, ranked by score
+        sparse_results: List of (symbol_id, bm25_score) from BM25, ranked by score
+
+    Returns:
+        Merged and sorted list of (symbol_id, rrf_score) tuples
+    """
+    # Calculate RRF scores
+    rrf_scores: dict[str, float] = {}
+
+    # Add contributions from dense results (rank 1-based)
+    for rank, (symbol_id, _score) in enumerate(dense_results, start=1):
+        rrf_scores[symbol_id] = rrf_scores.get(symbol_id, 0.0) + (RRF_K / (RRF_K + rank))
+
+    # Add contributions from sparse results (rank 1-based)
+    for rank, (symbol_id, _score) in enumerate(sparse_results, start=1):
+        rrf_scores[symbol_id] = rrf_scores.get(symbol_id, 0.0) + (RRF_K / (RRF_K + rank))
+
+    # Sort by RRF score descending
+    result = list(rrf_scores.items())
+    result.sort(key=lambda x: x[1], reverse=True)
+    return result
+
+
 @mcp.tool
 def codegraph_query(
     query: str,
@@ -372,6 +542,12 @@ def codegraph_query(
         db = Database(db_path)
         faiss_manager = FAISSIndexManager(faiss_path)
         embedding_model = EmbeddingModel()
+
+        # Build sparse index from database symbols
+        sparse_index = SparseIndex()
+        all_symbols = db.get_all_symbols()
+        sparse_index.add_symbols(all_symbols)
+        sparse_searcher = BM25Searcher(sparse_index)
     except Exception as e:
         logger.error(f"Failed to initialize components: {e}")
         return {
@@ -393,9 +569,12 @@ def codegraph_query(
     except Exception as e:
         logger.warning(f"Could not check index age: {e}")
 
-    # Step 1: Generate query embedding
+    # Step 1: Preprocess query (remove noise terms)
+    cleaned_query = preprocess_query(query)
+
+    # Step 2: Generate query embedding
     try:
-        query_embedding = embedding_model.embed_text(query)
+        query_embedding = embedding_model.embed_text(cleaned_query)
     except Exception as e:
         logger.error(f"Failed to generate query embedding: {e}")
         return {
@@ -405,16 +584,42 @@ def codegraph_query(
             "fallback_suggestion": "Use text-based search instead",
         }
 
-    # Step 2: Vector search
+    # Step 3: Dense search (FAISS) + Sparse search (BM25) + Merge
+    filename_matched_ids = set()  # Initialize for use in import closure pruning
     try:
-        vector_results = faiss_manager.search(query_embedding, k=VECTOR_K)
+        # Dense: Vector search
+        dense_results = faiss_manager.search(query_embedding, k=VECTOR_K)
+
+        # Sparse: BM25 search on preprocessed query tokens
+        query_tokens = cleaned_query.split()
+        sparse_results = sparse_searcher.search(query_tokens, k=VECTOR_K)
+
+        # Augment sparse results with filename matches
+        sparse_ids = set(sid for sid, _ in sparse_results)
+        filename_matched_ids = augment_with_filename_matches(
+            query_tokens, all_symbols, sparse_ids
+        )
+
+        # Convert augmented IDs to sparse results format
+        for aug_id in filename_matched_ids:
+            if aug_id not in sparse_ids:
+                sparse_results.append((aug_id, 0.1))  # Low score for filename matches
+
+        # Merge dense and sparse results
+        merged_results = merge_dense_sparse_results(dense_results, sparse_results)
+
+        # Get symbols from merged results
+        candidates = []
+        for symbol_id, _ in merged_results:
+            symbol = db.get_symbol(symbol_id)
+            if symbol:
+                candidates.append(symbol)
+
     except RuntimeError as e:
-        logger.error(f"FAISS search failed: {e}")
+        logger.error(f"Hybrid search failed: {e}")
         # Fallback to text search
         try:
-            all_symbols = db.get_all_symbols()
-            # Simple text search fallback
-            query_lower = query.lower()
+            query_lower = cleaned_query.lower()
             scored = []
             for symbol in all_symbols:
                 text = f"{symbol.id} {symbol.signature} {symbol.doc or ''}".lower()
@@ -422,22 +627,34 @@ def codegraph_query(
                     scored.append((symbol, 0.5))  # Neutral score
             scored.sort(key=lambda x: x[1], reverse=True)
             candidates = [s for s, _ in scored[:20]]
+            # Also perform filename matching for fallback
+            query_tokens = cleaned_query.split()
+            filename_matched_ids = augment_with_filename_matches(
+                query_tokens, all_symbols, set(s.id for s in candidates)
+            )
         except Exception as e2:
             logger.error(f"Text search fallback failed: {e2}")
             return {
                 "status": "error",
                 "error_type": "index_corrupt",
-                "message": f"Vector search failed: {e}",
+                "message": f"Hybrid search failed: {e}",
                 "fallback_suggestion": "Run 'codegraph build --full' to rebuild the index",
             }
-    else:
-        # Get symbols from vector results
-        candidate_ids = [sid for sid, _ in vector_results]
-        candidates = []
-        for symbol_id in candidate_ids:
-            symbol = db.get_symbol(symbol_id)
-            if symbol:
-                candidates.append(symbol)
+
+    # Ensure cursor file symbols are included (defensive measure for semantic gaps)
+    # When the cursor file itself should be included but wasn't found via search
+    if cursor_file and candidates:
+        cursor_symbols_included = any(
+            cursor_file.endswith(s.file) or s.file.endswith(cursor_file)
+            for s in candidates
+        )
+        if not cursor_symbols_included:
+            # Add symbols from cursor file that weren't found via search
+            for symbol in all_symbols:
+                if (cursor_file.endswith(symbol.file) or symbol.file.endswith(cursor_file)):
+                    if symbol not in candidates:
+                        candidates.append(symbol)
+                        filename_matched_ids.add(symbol.id)  # Mark as explicitly included
 
     if not candidates:
         return {
@@ -450,22 +667,32 @@ def codegraph_query(
         }
 
     # Step 3: Import closure pruning (if cursor_file provided)
+    # NOTE: Preserve filename-matched symbols as they are explicitly requested by query
     if cursor_file:
         try:
             cursor_path = repo_root / cursor_file
             reachable_files = get_import_closure(cursor_path, repo_root, max_depth=10)
 
-            # Filter to only symbols in reachable files
+            # Filter to only symbols in reachable files OR filename-matched
             pruned = []
             for symbol in candidates:
                 symbol_file = repo_root / symbol.file
-                if symbol_file in reachable_files:
+                # Preserve if in import closure OR was matched via filename
+                if symbol_file in reachable_files or symbol.id in filename_matched_ids:
                     pruned.append(symbol)
 
             if pruned:
                 candidates = pruned
         except Exception as e:
             logger.warning(f"Import closure pruning failed: {e}")
+
+    # Step 3.5: Test-source pairing augmentation
+    # If cursor is in test file, include corresponding source files
+    if cursor_file:
+        try:
+            candidates = augment_with_test_source_pairs(cursor_file, candidates, all_symbols)
+        except Exception as e:
+            logger.warning(f"Test-source pairing failed: {e}")
 
     # Step 4: Expand graph (if max_depth > 0)
     # TODO: Implement graph expansion via edges table
