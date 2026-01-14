@@ -572,6 +572,12 @@ def codegraph_query(
     # Step 1: Preprocess query (remove noise terms)
     cleaned_query = preprocess_query(query)
 
+    # DEBUG: Log query preprocessing for morphological gap analysis (task_028)
+    query_tokens = cleaned_query.split()
+    logger.debug(f"[task_028-debug] Original query: '{query}'")
+    logger.debug(f"[task_028-debug] Cleaned query: '{cleaned_query}'")
+    logger.debug(f"[task_028-debug] Query tokens: {query_tokens}")
+
     # Step 2: Generate query embedding
     try:
         query_embedding = embedding_model.embed_text(cleaned_query)
@@ -591,8 +597,23 @@ def codegraph_query(
         dense_results = faiss_manager.search(query_embedding, k=VECTOR_K)
 
         # Sparse: BM25 search on preprocessed query tokens
-        query_tokens = cleaned_query.split()
+        # Note: query_tokens already defined above for debug logging
         sparse_results = sparse_searcher.search(query_tokens, k=VECTOR_K)
+
+        # DEBUG: Log sparse search results for morphological gap analysis (task_028)
+        logger.debug(f"[task_028-debug] Sparse results (top 10): {sparse_results[:10]}")
+
+        # Check if cursor file symbols are in sparse results
+        if cursor_file:
+            cursor_file_symbols = [s for s in all_symbols if cursor_file.endswith(s.file) or s.file.endswith(cursor_file)]
+            cursor_file_ids = {s.id for s in cursor_file_symbols}
+            sparse_ids = {sid for sid, _ in sparse_results}
+            matched_cursor_symbols = cursor_file_ids & sparse_ids
+            logger.debug(f"[task_028-debug] Cursor file: {cursor_file}")
+            logger.debug(f"[task_028-debug] Cursor file symbols count: {len(cursor_file_symbols)}")
+            logger.debug(f"[task_028-debug] Cursor file symbols in sparse results: {len(matched_cursor_symbols)}")
+            if cursor_file_symbols:
+                logger.debug(f"[task_028-debug] Sample cursor symbol: {cursor_file_symbols[0].id} | signature: {cursor_file_symbols[0].signature[:80]}")
 
         # Augment sparse results with filename matches
         sparse_ids = set(sid for sid, _ in sparse_results)

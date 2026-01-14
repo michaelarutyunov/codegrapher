@@ -5,6 +5,8 @@ symbol signatures and filenames. Complements dense vector search for
 exact symbol matching and rare term queries.
 """
 
+import logging
+
 import re
 from collections import defaultdict
 from typing import List, Optional, Set
@@ -12,6 +14,9 @@ from typing import List, Optional, Set
 from rank_bm25 import BM25Okapi
 
 from codegrapher.models import Database, Symbol
+
+
+logger = logging.getLogger(__name__)
 
 
 # BM25 parameters (defaults work well for code)
