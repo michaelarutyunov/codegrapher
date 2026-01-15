@@ -31,7 +31,7 @@ from codegrapher.vector_store import (
     FAISSIndexManager,
     generate_symbol_embeddings,
 )
-from codegrapher.watcher import install_git_hook
+from codegrapher.watcher import install_git_hook, FileWatcher
 from codegrapher.graph import extract_edges_from_file, compute_pagerank
 
 logger = logging.getLogger(__name__)
@@ -478,6 +478,52 @@ def cmd_mcp_config(args: argparse.Namespace) -> None:
         print(config)
 
 
+def cmd_watch(args: argparse.Namespace) -> None:
+    """Watch for file changes and auto-update the index."""
+    root = find_root()
+    index_path = get_index_path(root)
+
+    # Check if index exists
+    if not index_path.exists():
+        print(f"Error: Index not found at {index_path}", file=sys.stderr)
+        print("Run 'codegraph init' followed by 'codegraph build --full' first.", file=sys.stderr)
+        sys.exit(1)
+
+    # Initialize components
+    print("Loading index...")
+    db = Database(index_path / "symbols.db")
+    faiss_manager = FAISSIndexManager(index_path / "index.faiss")
+    indexer = IncrementalIndexer(cache_size=50)
+
+    print(f"Watching for changes in: {root}")
+    print("Press Ctrl+C to stop")
+    print("=" * 50)
+
+    # Create and start watcher
+    watcher = FileWatcher(
+        repo_root=root,
+        db=db,
+        faiss_manager=faiss_manager,
+        indexer=indexer,
+        bulk_callback=None,  # No auto-rebuild for watch mode
+    )
+
+    try:
+        watcher.start()
+        # Keep the main thread alive
+        import signal
+        signal.pause()  # Wait for signal (Ctrl+C)
+    except KeyboardInterrupt:
+        print("\nStopping watcher...")
+    finally:
+        watcher.stop()
+        stats = watcher.get_stats()
+        print("=" * 50)
+        print("Watcher stopped")
+        print(f"  Changes processed: {stats['changes_processed']}")
+        print(f"  Bulk rebuilds triggered: {stats['bulk_rebuilds_triggered']}")
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the main argument parser."""
     parser = argparse.ArgumentParser(
@@ -525,6 +571,10 @@ def create_parser() -> argparse.ArgumentParser:
     mcp_config_parser = subparsers.add_parser("mcp-config", help="Generate MCP server configuration")
     mcp_config_parser.add_argument("--output", "-o", help="Write config to file")
     mcp_config_parser.set_defaults(func=cmd_mcp_config)
+
+    # watch subcommand
+    watch_parser = subparsers.add_parser("watch", help="Watch for file changes and auto-update the index")
+    watch_parser.set_defaults(func=cmd_watch)
 
     return parser
 
@@ -576,6 +626,13 @@ def mcp_config_command() -> None:
     parser.add_argument("--output", "-o", help="Write config to file")
     args = parser.parse_args()
     cmd_mcp_config(args)
+
+
+def watch_command() -> None:
+    """Entry point for codegraph-watch."""
+    parser = argparse.ArgumentParser(prog="codegraph-watch", description="Watch for file changes and auto-update the CodeGrapher index")
+    args = parser.parse_args()
+    cmd_watch(args)
 
 
 def main() -> None:

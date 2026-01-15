@@ -160,6 +160,7 @@ See [MCP Integration](#mcp-integration) for detailed configuration options.
 | `codegraph query <query>` | Test search from CLI |
 | `codegraph update [file]` | Incremental update for changed files |
 | `codegraph update --git-changed` | Update all files changed since last commit |
+| `codegraph watch` | Watch for file changes and auto-update the index (foreground) |
 | `codegraph mcp-config` | Generate MCP server configuration |
 
 ### Examples
@@ -173,6 +174,9 @@ codegraph build --full
 
 # Query for code related to authentication
 codegraph query "authentication user login"
+
+# Watch for changes (runs in foreground, press Ctrl+C to stop)
+codegraph watch
 
 # Update after editing files
 codegraph update src/auth.py

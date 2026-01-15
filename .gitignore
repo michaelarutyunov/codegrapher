@@ -213,6 +213,7 @@ debug/
 dev/
 prompt.txt
 dev_narrative.md
+.codegraph/
 
 # Phase 12 Evaluation
 fixtures/test_repos/eval_repos/

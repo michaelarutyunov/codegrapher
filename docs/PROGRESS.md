@@ -786,6 +786,56 @@ Test Coverage:
 - ✅ Module is 476 LOC (< 600 limit)
 - ✅ All 21 tests pass
 
+### Post-Implementation Update (2026-01-15)
+
+**Added `codegraph watch` CLI Command**
+
+The FileWatcher class was fully implemented during Phase 9 but lacked a user-facing CLI command. This gap has been addressed with the addition of the `codegraph watch` command.
+
+**Changes Made:**
+- Added `cmd_watch()` function in `cli.py` to provide foreground file watching
+- Added watch subparser to `create_parser()`
+- Added `watch_command()` standalone entry point
+- Added `codegraph-watch` script to `pyproject.toml` entry points
+
+**Files Modified:**
+- `src/codegrapher/cli.py` (+56 LOC)
+  - Import: Added `FileWatcher` from `codegrapher.watcher`
+  - Added `cmd_watch()` function (45 LOC)
+  - Added watch subparser to `create_parser()` (3 LOC)
+  - Added `watch_command()` standalone entry point (6 LOC)
+- `pyproject.toml` (+1 line)
+  - Added `codegraph-watch = "codegrapher.cli:watch_command"` entry point
+
+**Usage:**
+```bash
+codegraph watch
+```
+
+The command runs in the foreground, monitoring the repository for Python file changes and triggering incremental index updates automatically. Press Ctrl+C to stop.
+
+**Behavior:**
+- Checks for existing index before starting (exits with helpful error if missing)
+- Loads database, FAISS index, and incremental indexer
+- Starts FileWatcher with 0.5s debouncing
+- Processes changes in background thread
+- Displays statistics on exit (changes processed, bulk rebuilds triggered)
+- Gracefully handles Ctrl+C with proper cleanup
+
+**Why This Matters:**
+Prior to this addition, the FileWatcher was only accessible programmatically. Users had three options for index updates:
+1. Git post-commit hook (automatic but only on commits)
+2. Manual `codegraph update` (requires explicit invocation)
+3. Writing custom Python code to use FileWatcher
+
+The `codegraph watch` command provides a simple, discoverable way to enable real-time index updates during active development, improving the developer experience and reducing the need for manual index management.
+
+**Integration Status:** ✅ Complete
+- Command is available via both `codegraph watch` and standalone `codegraph-watch`
+- Proper error handling for missing index
+- Graceful shutdown on Ctrl+C
+- Statistics reporting on exit
+
 ---
 
 ## Phase 10: MCP Server Interface
@@ -877,7 +927,7 @@ Test Coverage:
 Created `cli.py` implementing PRD Phase 11: CLI & Build Tools. Provides user-facing commands for initialization, index building, querying, and updating. Uses argparse for command-line parsing with the `set_defaults` handler pattern.
 
 ### Files Created
-- `src/codegrapher/cli.py` (495 LOC)
+- `src/codegrapher/cli.py` (551 LOC) - Updated 2026-01-15 with `codegraph watch` command
 - `tests/test_cli.py` (345 LOC)
 - `tests/test_integration.py` (325 LOC)
 
@@ -922,6 +972,7 @@ Test Coverage:
 | `codegraph query <query>` | CLI testing interface |
 | `codegraph update [--git-changed] [file]` | Incremental update helper |
 | `codegraph mcp-config` | Generate MCP server configuration |
+| `codegraph watch` | Watch for file changes and auto-update the index (Added 2026-01-15) |
 
 ### Key Design Decisions
 1. **set_defaults handler pattern**: Uses `subparser.set_defaults(func=handler)` to bind handler functions directly to subcommands. This eliminates manual routing logic in `main()`.
@@ -1584,8 +1635,8 @@ python scripts/eval_token_save.py --ground-truth custom.jsonl --output-report re
 | `indexer.py` | 488 | 600 | ✅ OK |
 | `watcher.py` | 476 | 600 | ✅ OK |
 | `server.py` | 482 | 600 | ✅ OK |
-| `cli.py` | 495 | 600 | ✅ OK |
-| **Total** | **4108** | - | - |
+| `cli.py` | 551 | 600 | ✅ OK (Updated 2026-01-15) |
+| **Total** | **4164** | - | - |
 
 ### Dependencies Used
 - ✅ Pydantic (data validation)
