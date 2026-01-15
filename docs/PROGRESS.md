@@ -1621,6 +1621,87 @@ python scripts/eval_token_save.py --ground-truth custom.jsonl --output-report re
 
 ---
 
+## Post-v1 Improvements (2026-01-15)
+
+### Enhanced MCP Server with Multi-Project Support
+
+**Status:** ✅ COMPLETE
+
+Improvements made after v1 completion to enhance usability and multi-project support.
+
+### Changes Made
+
+#### 1. Auto-Detection of Project Indexes
+
+**Problem:** Codegrapher's `find_repo_root()` only searched for `.git` directory from `cwd`, requiring hardcoded `PROJECT_ROOT` environment variable in MCP config.
+
+**Solution:** Modified `find_repo_root()` to search for `.codegraph` directory first, then fall back to `.git`. This allows codegrapher to work automatically in any indexed project.
+
+**Files Modified:**
+- `src/codegrapher/server.py` - Updated `find_repo_root()` function
+
+**Benefits:**
+- User-level MCP installation works for all projects
+- No per-project configuration needed
+- Automatic detection of which project to index
+
+#### 2. New MCP Tools
+
+Added two new MCP tools for index management:
+
+**`codegraph_status`** - Check index health
+- Returns: index age, total symbols/files, stale status, suggestions
+- Stale threshold: 24 hours
+- Safe: only reads database, never modifies
+
+**`codegraph_refresh`** - Update the index
+- Modes: `incremental` (git-changed files) or `full` (rebuild)
+- Returns: files updated, duration, success/error status
+- Safe: uses subprocess to call existing CLI, handles timeouts
+
+**Files Modified:**
+- `src/codegrapher/server.py` (+754 LOC total) - Added two new `@mcp.tool` decorated functions
+
+#### 3. Simplified MCP Configuration
+
+Removed hardcoded environment variables from MCP configuration:
+- Removed `PROJECT_ROOT` (no longer needed with auto-detection)
+- Removed `PYTHONPATH` (uses system path instead)
+
+**User-level MCP config:**
+```json
+{
+  "mcpServers": {
+    "codegrapher": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["-m", "codegrapher.server"]
+    }
+  }
+}
+```
+
+### Updated Statistics
+
+| Module | Previous LOC | Current LOC | Change |
+|--------|-------------|-------------|--------|
+| `server.py` | 482 | 1236 | +754 |
+| **Total** | 4164 | 4918 | +754 |
+
+### Usage Example
+
+```
+User: "Check the codegrapher index status"
+Claude: [uses codegraph_status]
+     "Index is 9.2 hours old, 560 symbols. Status: fresh."
+
+User: "The index is stale, refresh it"
+Claude: [uses codegraph_refresh with mode="incremental"]
+     "Updated 3 files in 2.3 seconds. Index is now fresh."
+```
+
+---
+
 ## Cumulative Statistics
 
 ### Lines of Code
@@ -1634,9 +1715,9 @@ python scripts/eval_token_save.py --ground-truth custom.jsonl --output-report re
 | `secrets.py` | 277 | 600 | ✅ OK |
 | `indexer.py` | 488 | 600 | ✅ OK |
 | `watcher.py` | 476 | 600 | ✅ OK |
-| `server.py` | 482 | 600 | ✅ OK |
-| `cli.py` | 551 | 600 | ✅ OK (Updated 2026-01-15) |
-| **Total** | **4164** | - | - |
+| `server.py` | 1236 | 600 | ⚠️ Exceeds (post-v1 additions) |
+| `cli.py` | 551 | 600 | ✅ OK |
+| **Total** | **4918** | - | - |
 
 ### Dependencies Used
 - ✅ Pydantic (data validation)

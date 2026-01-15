@@ -155,7 +155,10 @@ def _get_pagerank_score(symbol_id: str, pagerank_scores: dict[str, float]) -> fl
 
 
 def find_repo_root() -> Optional[Path]:
-    """Find the repository root by searching for .git directory.
+    """Find the repository root by searching for .codegraph or .git directory.
+
+    Searches from current directory upward, prioritizing .codegraph index.
+    This allows codegrapher to work automatically in any indexed project.
 
     Returns:
         Repository root path, or None if not found
@@ -163,8 +166,11 @@ def find_repo_root() -> Optional[Path]:
     # Start from current directory
     current = Path.cwd()
 
-    # Search up for .git directory
+    # Search up for .codegraph or .git directory
     for _ in range(20):  # Limit search depth
+        # Prefer .codegraph (our index) over .git
+        if (current / ".codegraph").exists():
+            return current
         if (current / ".git").exists():
             return current
         parent = current.parent
@@ -929,6 +935,283 @@ def codegraph_query(
         "truncated": truncated,
         "total_candidates": total_candidates,
     }
+
+
+@mcp.tool
+def codegraph_status() -> dict:
+    """Check CodeGrapher index status and health.
+
+    Returns information about the index including age, size,
+    and whether it needs to be refreshed.
+
+    Returns:
+        Dictionary with:
+        - status: "success" or "error"
+        - index_exists: bool
+        - index_age_hours: float (hours since last update)
+        - total_symbols: int
+        - total_files: int
+        - last_indexed: ISO timestamp or None
+        - is_stale: bool (True if index is older than 24 hours)
+        - suggestion: str (what to do if needed)
+        - error_type: error code (if error)
+        - message: error message (if error)
+    """
+    STALE_THRESHOLD_HOURS = 24
+
+    # Find repository root
+    repo_root = find_repo_root()
+    if repo_root is None:
+        return {
+            "status": "error",
+            "error_type": "repo_not_found",
+            "message": "Not in a git repository (no .git directory found).",
+            "suggestion": "Run from within a git repository.",
+        }
+
+    # Get index paths
+    index_dir = get_index_path(repo_root)
+    db_path = index_dir / "symbols.db"
+    faiss_path = index_dir / "index.faiss"
+
+    # Check if index exists
+    index_exists = db_path.exists() and faiss_path.exists()
+
+    if not index_exists:
+        return {
+            "status": "success",
+            "index_exists": False,
+            "is_stale": False,
+            "suggestion": f"No index found. Run 'codegraph init' then 'codegraph build --full' to create the index.",
+        }
+
+    # Get index metadata
+    try:
+        db = Database(db_path)
+        last_indexed_str = db.get_meta("last_indexed")
+        total_symbols = db.get_meta("total_symbols")
+        total_files = db.get_meta("total_files")
+
+        # Calculate index age
+        if last_indexed_str:
+            last_indexed_time = datetime.fromisoformat(last_indexed_str)
+            age_seconds = (datetime.now() - last_indexed_time).total_seconds()
+            age_hours = age_seconds / 3600
+        else:
+            age_hours = float("inf")
+            last_indexed_time = None
+
+        is_stale = age_hours > STALE_THRESHOLD_HOURS
+
+        # Build suggestion
+        if is_stale:
+            if age_hours > 168:  # 1 week
+                suggestion = f"Index is {age_hours:.0f} hours ({age_hours/24:.0f} days) old. Run 'codegraph build --full' to rebuild."
+            else:
+                suggestion = f"Index is {age_hours:.0f} hours old. Run 'codegraph update --git-changed' to update."
+        else:
+            suggestion = "Index is fresh."
+
+        return {
+            "status": "success",
+            "index_exists": True,
+            "index_age_hours": round(age_hours, 1),
+            "total_symbols": int(total_symbols) if total_symbols else 0,
+            "total_files": int(total_files) if total_files else 0,
+            "last_indexed": last_indexed_str,
+            "is_stale": is_stale,
+            "suggestion": suggestion,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get index status: {e}")
+        return {
+            "status": "error",
+            "error_type": "index_read_error",
+            "message": f"Failed to read index: {e}",
+            "suggestion": "Run 'codegraph build --full' to rebuild the index.",
+        }
+
+
+@mcp.tool
+def codegraph_refresh(mode: str = "incremental") -> dict:
+    """Refresh the CodeGrapher index.
+
+    Updates the index by re-indexing changed files (incremental)
+    or rebuilding from scratch (full).
+
+    Args:
+        mode: "incremental" for git-changed files only, "full" for complete rebuild
+
+    Returns:
+        Dictionary with:
+        - status: "success" or "error"
+        - mode: "incremental" or "full"
+        - files_updated: int
+        - symbols_added: int
+        - symbols_removed: int
+        - duration_seconds: float
+        - index_age_hours: float (new age after refresh)
+        - error_type: error code (if error)
+        - message: error message (if error)
+    """
+    import subprocess
+
+    if mode not in ("incremental", "full"):
+        return {
+            "status": "error",
+            "error_type": "invalid_mode",
+            "message": f"Invalid mode: {mode}. Use 'incremental' or 'full'.",
+        }
+
+    # Find repository root
+    repo_root = find_repo_root()
+    if repo_root is None:
+        return {
+            "status": "error",
+            "error_type": "repo_not_found",
+            "message": "Not in a git repository (no .git directory found).",
+            "suggestion": "Run from within a git repository.",
+        }
+
+    # Get index paths
+    index_dir = get_index_path(repo_root)
+    db_path = index_dir / "symbols.db"
+    faiss_path = index_dir / "index.faiss"
+
+    # Check if index exists for incremental mode
+    if mode == "incremental" and (not db_path.exists() or not faiss_path.exists()):
+        return {
+            "status": "error",
+            "error_type": "index_not_found",
+            "message": "No index found for incremental update.",
+            "suggestion": "Run 'codegraph build --full' to create the index first.",
+        }
+
+    start_time = datetime.now()
+
+    try:
+        if mode == "full":
+            # Full rebuild - use subprocess to call CLI
+            result = subprocess.run(
+                ["codegraph", "build", "--full"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+            )
+
+            if result.returncode != 0:
+                return {
+                    "status": "error",
+                    "mode": mode,
+                    "error_type": "build_failed",
+                    "message": result.stderr or result.stdout,
+                }
+
+            # Parse output for stats
+            # Look for lines like "Total symbols: 560"
+            symbols_added = 0
+            for line in result.stdout.split("\n"):
+                if "Total symbols:" in line:
+                    try:
+                        symbols_added = int(line.split(":")[1].strip())
+                    except (ValueError, IndexError):
+                        pass
+
+            return {
+                "status": "success",
+                "mode": mode,
+                "files_updated": 0,  # CLI doesn't report this separately
+                "symbols_added": symbols_added,
+                "symbols_removed": 0,
+                "duration_seconds": round((datetime.now() - start_time).total_seconds(), 1),
+                "index_age_hours": 0.0,  # Fresh after full rebuild
+            }
+
+        else:  # incremental
+            # Get git-changed files
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=M", "*.py"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode != 0:
+                return {
+                    "status": "error",
+                    "mode": mode,
+                    "error_type": "git_failed",
+                    "message": "Failed to get changed files from git.",
+                }
+
+            changed = result.stdout.strip().split("\n")
+            files_to_update = [repo_root / f for f in changed if f and f.endswith(".py")]
+
+            if not files_to_update:
+                return {
+                    "status": "success",
+                    "mode": mode,
+                    "files_updated": 0,
+                    "symbols_added": 0,
+                    "symbols_removed": 0,
+                    "duration_seconds": 0.0,
+                    "message": "No files changed since last update.",
+                }
+
+            # Run update command
+            result = subprocess.run(
+                ["codegraph", "update", "--git-changed"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            if result.returncode != 0:
+                return {
+                    "status": "error",
+                    "mode": mode,
+                    "error_type": "update_failed",
+                    "message": result.stderr or result.stdout,
+                }
+
+            # Parse "Files updated: X" from output
+            files_updated = 0
+            for line in result.stdout.split("\n"):
+                if "Files updated:" in line:
+                    try:
+                        files_updated = int(line.split(":")[1].strip())
+                    except (ValueError, IndexError):
+                        pass
+
+            return {
+                "status": "success",
+                "mode": mode,
+                "files_updated": files_updated,
+                "symbols_added": 0,  # CLI doesn't report this detail
+                "symbols_removed": 0,
+                "duration_seconds": round((datetime.now() - start_time).total_seconds(), 1),
+                "index_age_hours": 0.0,  # Fresh after update
+            }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "mode": mode,
+            "error_type": "timeout",
+            "message": "Index refresh timed out.",
+        }
+    except Exception as e:
+        logger.error(f"Index refresh failed: {e}")
+        return {
+            "status": "error",
+            "mode": mode,
+            "error_type": "refresh_error",
+            "message": f"Failed to refresh index: {e}",
+        }
 
 
 def generate_mcp_config() -> str:

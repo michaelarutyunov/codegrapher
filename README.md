@@ -163,6 +163,14 @@ See [MCP Integration](#mcp-integration) for detailed configuration options.
 | `codegraph watch` | Watch for file changes and auto-update the index (foreground) |
 | `codegraph mcp-config` | Generate MCP server configuration |
 
+### MCP Tools (Available in Claude Code)
+
+| Tool | Description |
+|------|-------------|
+| `codegraph_query` | Search code index with token-efficient results |
+| `codegraph_status` | Check index health, age, and staleness |
+| `codegraph_refresh` | Update index (incremental or full rebuild) |
+
 ### Examples
 
 ```bash
@@ -196,11 +204,10 @@ CodeGrapher works as an MCP (Model Context Protocol) server. There are two ways 
 
 ### Option 1: Claude Code CLI (Recommended for terminal use)
 
-If you're using Claude Code from the terminal (`claude` command), configure it per-project:
+If you're using Claude Code from the terminal (`claude` command), configure it at user-level:
 
-1. **Start from your project directory:**
+1. **Start Claude Code from anywhere** (no need to be in a specific project):
    ```bash
-   cd ~/projects/codegrapher
    claude
    ```
 
@@ -213,38 +220,27 @@ If you're using Claude Code from the terminal (`claude` command), configure it p
    - **Type:** stdio
    - **Command:** `python3`
    - **Args:** `-m codegrapher.server`
-   - **Environment:**
-     ```
-     PYTHONPATH=/home/mikhailarutyunov/projects/codegrapher/src
-     PROJECT_ROOT=/home/mikhailarutyunov/projects/codegrapher
-     ```
-   *(Adjust paths to match your project location)*
+   - **Environment:** (empty - no longer needed!)
 
 4. **Verify** with `/mcp` - you should see `codegrapher · ✔ connected`
 
 **Or edit `~/.claude.json` directly:**
 
-Add to your project's entry under `projects.{your_project_path}.mcpServers`:
+Add to the user-level `mcpServers` section:
 
 ```json
 {
-  "projects": {
-    "/home/mikhailarutyunov/projects/codegrapher": {
-      "mcpServers": {
-        "codegrapher": {
-          "type": "stdio",
-          "command": "python3",
-          "args": ["-m", "codegrapher.server"],
-          "env": {
-            "PYTHONPATH": "/home/mikhailarutyunov/projects/codegrapher/src",
-            "PROJECT_ROOT": "/home/mikhailarutyunov/projects/codegrapher"
-          }
-        }
-      }
+  "mcpServers": {
+    "codegrapher": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["-m", "codegrapher.server"]
     }
   }
 }
 ```
+
+**How it works:** CodeGrapher automatically detects which project you're in by searching for `.codegraph` directories. No per-project configuration needed!
 
 Then restart Claude Code completely (`exit` or `Ctrl+D`) and start a new session.
 
@@ -266,10 +262,11 @@ Then restart Claude Code completely (`exit` or `Ctrl+D`) and start a new session
 ```
 
 ★ Insight ─────────────────────────────────────
-MCP Config Key Differences
-- Claude Code CLI: Project-specific config in `~/.claude.json` with `type: "stdio"` required
-- Claude Desktop: Global config file, `cwd` parameter instead of `PYTHONPATH`
-- Use `PYTHONPATH` env var for more portable configuration across working directories
+MCP Config Key Updates (2026-01-15)
+- **Auto-detection:** CodeGrapher now searches for `.codegraph` directories automatically
+- **User-level config:** Configure once in `~/.claude.json`, works for all projects
+- **No environment vars needed:** `PROJECT_ROOT` and `PYTHONPATH` are no longer required
+- **New MCP tools:** `codegraph_status` (check index health) and `codegraph_refresh` (update index)
 ─────────────────────────────────────────────────
 
 ---
@@ -472,39 +469,46 @@ Then restart WSL: `wsl --shutdown` from PowerShell.
 If the `codegraph_query` tool doesn't show up after configuring MCP:
 
 1. **Verify you're editing the correct config file:**
-   - Claude Code CLI uses: `~/.claude.json` (project-specific under `projects.{path}.mcpServers`)
+   - Claude Code CLI uses: `~/.claude.json` (user-level under `mcpServers`)
    - Claude Desktop uses: `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 2. **Ensure `type: "stdio"` is set** (required for Claude Code CLI)
 
-3. **Check PYTHONPATH points to `src/` directory**, not project root
+3. **No environment variables needed** - auto-detection finds projects automatically
 
 4. **Restart Claude Code completely** (`exit` or `Ctrl+D`, then start fresh)
 
-5. **Start Claude Code from your project directory:**
-   ```bash
-   cd /path/to/your/project
-   claude
-   ```
+5. **Run `codegraph build --full` first** - CodeGrapher needs an index to work
 
 6. **Verify with `/mcp`** - should show `codegrapher · ✔ connected`
 
-### MCP Server Starts But Tool Not Available
+7. **Check you're in a git repository** - CodeGrapher searches for `.git` or `.codegraph` directories
 
-This usually means the module import is failing:
+### New MCP Tools Available
 
-```bash
-# Test server startup manually
-PYTHONPATH=/path/to/project/src python3 -m codegrapher.server
+Once configured, you have access to three MCP tools:
 
-# Should show: "Starting MCP server 'codegrapher' with transport 'stdio'"
-# and list available tools including 'codegraph_query'
+**`codegraph_status`** - Check index health
+```json
+{
+  "status": "success",
+  "index_exists": true,
+  "index_age_hours": 9.2,
+  "total_symbols": 560,
+  "is_stale": false,
+  "suggestion": "Index is fresh."
+}
 ```
 
-If this fails, check:
-- Python version is 3.10+
-- All dependencies installed: `pip install -e .`
-- PYTHONPATH includes the `src/` directory
+**`codegraph_refresh`** - Update the index
+```json
+{
+  "status": "success",
+  "mode": "incremental",
+  "files_updated": 3,
+  "duration_seconds": 2.3
+}
+```
 
 ---
 
