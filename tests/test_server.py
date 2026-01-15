@@ -19,6 +19,8 @@ from codegrapher.server import (
     get_git_log,
     generate_mcp_config,
     codegraph_query,
+    is_test_source_pair,
+    augment_with_bidirectional_test_pairs,
 )
 from codegrapher.models import Symbol
 
@@ -366,3 +368,199 @@ class TestGetGitLog:
         # Should have entries for the files
         assert "test1.py" in result or str(tmp_path / "test1.py") in result
         assert "test2.py" in result or str(tmp_path / "test2.py") in result
+
+
+class TestIsTestSourcePair:
+    """Tests for is_test_source_pair function."""
+
+    def test_test_prefix_same_directory(self):
+        """Pattern 1: test_ prefix in same directory."""
+        assert is_test_source_pair("test_compiler.py", "compiler.py")
+        assert is_test_source_pair("test_client.py", "client.py")
+
+    def test_tests_src_mirror_structure(self):
+        """Pattern 2: tests/ mirrors src/ structure."""
+        assert is_test_source_pair("tests/test_compiler.py", "src/compiler.py")
+        assert is_test_source_pair("tests/test_client.py", "src/client.py")
+        assert is_test_source_pair("tests/compiler.py", "src/compiler.py")
+
+    def test_test_suffix(self):
+        """Pattern 3: _test.py suffix."""
+        assert is_test_source_pair("compiler_test.py", "compiler.py")
+        assert is_test_source_pair("client_test.py", "client.py")
+
+    def test_no_match(self):
+        """Files that are not test-source pairs."""
+        assert not is_test_source_pair("main.py", "utils.py")
+        assert not is_test_source_pair("test_a.py", "test_b.py")
+        assert not is_test_source_pair("compiler.py", "utils.py")
+
+    def test_windows_paths(self):
+        """Windows path normalization."""
+        assert is_test_source_pair("test_compiler.py", "compiler.py")
+        assert is_test_source_pair("tests\\test_compiler.py", "src\\compiler.py")
+
+    def test_parallel_directory_trees(self):
+        """Pattern 6: Parallel directory trees (src/ vs testing/)."""
+        # pytest's own test structure
+        assert is_test_source_pair("testing/python/approx.py", "src/_pytest/python/approx.py")
+        # Same filename in parallel trees
+        assert is_test_source_pair("testing/foo/bar.py", "src/foo/bar.py")
+        # With test_ prefix in parallel tree
+        assert is_test_source_pair("testing/test_utils.py", "src/utils.py")
+
+    def test_init_py_handling(self):
+        """Pattern 7: __init__.py uses parent directory name."""
+        # Werkzeug example: debug/__init__.py ↔ test_debug.py
+        assert is_test_source_pair("tests/test_debug.py", "src/werkzeug/debug/__init__.py")
+        # Flask example
+        assert is_test_source_pair("tests/test_helpers.py", "src/flask/helpers/__init__.py")
+        # Generic pattern
+        assert is_test_source_pair("test_mymodule.py", "mypackage/mymodule/__init__.py")
+
+
+class TestAugmentWithBidirectionalTestPairs:
+    """Tests for augment_with_bidirectional_test_pairs function."""
+
+    def make_symbol(self, id: str, file: str) -> Symbol:
+        """Helper to create a symbol."""
+        return Symbol(
+            id=id,
+            file=file,
+            start_line=1,
+            end_line=5,
+            signature=f"def {id}():",
+            doc="",
+            mutates="",
+            embedding=np.zeros(768, dtype=np.float32),
+        )
+
+    def test_source_to_test_pairing(self):
+        """Source file in candidates → adds test file."""
+        # Candidates have symbols from compiler.py
+        source_symbol = self.make_symbol("compiler.parse", "compiler.py")
+        candidates = [source_symbol]
+
+        # All symbols includes test_compiler.py
+        test_symbol = self.make_symbol("test_compiler.parse", "test_compiler.py")
+        all_symbols = [source_symbol, test_symbol]
+
+        result = augment_with_bidirectional_test_pairs(candidates, all_symbols)
+
+        # Should add test file
+        assert len(result) > len(candidates)
+        assert any(s.file == "test_compiler.py" for s in result)
+
+    def test_test_to_source_pairing(self):
+        """Test file in candidates → adds source file."""
+        # Candidates have symbols from test_compiler.py
+        test_symbol = self.make_symbol("test_compiler.parse", "test_compiler.py")
+        candidates = [test_symbol]
+
+        # All symbols includes compiler.py
+        source_symbol = self.make_symbol("compiler.parse", "compiler.py")
+        all_symbols = [test_symbol, source_symbol]
+
+        result = augment_with_bidirectional_test_pairs(candidates, all_symbols)
+
+        # Should add source file
+        assert len(result) > len(candidates)
+        assert any(s.file == "compiler.py" for s in result)
+
+    def test_tests_src_structure_pairing(self):
+        """Tests/ and src/ directory structure pairing."""
+        # Candidates have symbols from src/compiler.py
+        source_symbol = self.make_symbol("compiler.parse", "src/compiler.py")
+        candidates = [source_symbol]
+
+        # All symbols includes tests/test_compiler.py
+        test_symbol = self.make_symbol("test_compiler.parse", "tests/test_compiler.py")
+        all_symbols = [source_symbol, test_symbol]
+
+        result = augment_with_bidirectional_test_pairs(candidates, all_symbols)
+
+        # Should add test file
+        assert any(s.file == "tests/test_compiler.py" for s in result)
+
+    def test_multiple_candidates_all_get_paired(self):
+        """Multiple source files → all get their test files added."""
+        # Candidates have multiple source files
+        compiler_sym = self.make_symbol("compiler.parse", "compiler.py")
+        client_sym = self.make_symbol("client.request", "client.py")
+        candidates = [compiler_sym, client_sym]
+
+        # All symbols includes both test files
+        test_compiler = self.make_symbol("test_compiler.parse", "test_compiler.py")
+        test_client = self.make_symbol("test_client.request", "test_client.py")
+        all_symbols = [compiler_sym, client_sym, test_compiler, test_client]
+
+        result = augment_with_bidirectional_test_pairs(candidates, all_symbols)
+
+        # Should add both test files
+        result_files = {s.file for s in result}
+        assert "test_compiler.py" in result_files
+        assert "test_client.py" in result_files
+
+    def test_no_duplicates(self):
+        """Don't add symbols that are already in candidates."""
+        # Candidates have both source and test
+        source_sym = self.make_symbol("compiler.parse", "compiler.py")
+        test_sym = self.make_symbol("test_compiler.parse", "test_compiler.py")
+        candidates = [source_sym, test_sym]
+
+        all_symbols = [source_sym, test_sym]
+
+        result = augment_with_bidirectional_test_pairs(candidates, all_symbols)
+
+        # Should not add duplicates
+        assert len(result) == len(candidates)
+
+    def test_no_false_positives(self):
+        """Don't pair unrelated files."""
+        # Candidates have compiler.py
+        compiler_sym = self.make_symbol("compiler.parse", "compiler.py")
+        candidates = [compiler_sym]
+
+        # All symbols includes unrelated test files
+        test_client = self.make_symbol("test_client.request", "test_client.py")
+        test_utils = self.make_symbol("test_utils.helper", "test_utils.py")
+        all_symbols = [compiler_sym, test_client, test_utils]
+
+        result = augment_with_bidirectional_test_pairs(candidates, all_symbols)
+
+        # Should NOT add unrelated test files
+        result_files = {s.file for s in result}
+        assert "test_client.py" not in result_files
+        assert "test_utils.py" not in result_files
+
+    def test_real_world_jinja_example(self):
+        """Real-world example from task_028 (jinja)."""
+        # Candidates have src/jinja2/compiler.py
+        compiler = self.make_symbol("jinja2.compiler.compile", "src/jinja2/compiler.py")
+        candidates = [compiler]
+
+        # All symbols includes tests/test_compile.py
+        test_compile = self.make_symbol("test_compile.test", "tests/test_compile.py")
+        all_symbols = [compiler, test_compile]
+
+        result = augment_with_bidirectional_test_pairs(candidates, all_symbols)
+
+        # Should add test file
+        result_files = {s.file for s in result}
+        assert "tests/test_compile.py" in result_files
+
+    def test_real_world_starlette_example(self):
+        """Real-world example from task_039 (starlette)."""
+        # Candidates have starlette/middleware/exceptions.py
+        exceptions = self.make_symbol("middleware.http_exception", "starlette/middleware/exceptions.py")
+        candidates = [exceptions]
+
+        # All symbols includes tests/test_exceptions.py
+        test_exceptions = self.make_symbol("test_exceptions.exception", "tests/test_exceptions.py")
+        all_symbols = [exceptions, test_exceptions]
+
+        result = augment_with_bidirectional_test_pairs(candidates, all_symbols)
+
+        # Should add test file
+        result_files = {s.file for s in result}
+        assert "tests/test_exceptions.py" in result_files

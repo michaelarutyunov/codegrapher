@@ -355,10 +355,14 @@ def get_git_log(repo_root: Path) -> dict[str, datetime]:
 def is_test_source_pair(test_file: str, source_file: str) -> bool:
     """Check if two files are test-source pairs.
 
-    Supports three common patterns:
+    Supports seven common patterns:
     1. test_ prefix in same directory (test_mypath.py ↔ mypath.py)
     2. tests/ mirrors src/ structure (tests/mypath.py ↔ src/mypath.py)
     3. _test.py suffix (mypath_test.py ↔ mypath.py)
+    4. Base filename match (handles nested paths like src/jinja2/compiler.py ↔ tests/test_compiler.py)
+    5. Fuzzy matching (compiler.py ↔ test_compile.py - substring match)
+    6. Parallel directory trees (src/_pytest/python/approx.py ↔ testing/python/approx.py)
+    7. __init__.py handling (src/werkzeug/debug/__init__.py ↔ tests/test_debug.py)
 
     Args:
         test_file: Path to the test file
@@ -393,10 +397,138 @@ def is_test_source_pair(test_file: str, source_file: str) -> bool:
             return True
 
     # Pattern 3: _test.py suffix
-    if test_norm == f"{source_norm}_test":
+    # Strip .py extension from source before adding _test
+    if source_norm.endswith(".py"):
+        source_base = source_norm[:-3]  # Remove ".py"
+        if test_norm == f"{source_base}_test.py":
+            return True
+
+    # Pattern 4: Base filename match (for nested paths)
+    # Extract base filenames (without path and .py extension)
+    test_basename = test_norm.split("/")[-1].removesuffix(".py")
+    source_basename = source_norm.split("/")[-1].removesuffix(".py")
+
+    # Check if test name is test_ + source name or source name + _test
+    if test_basename == f"test_{source_basename}" or test_basename == f"{source_basename}_test":
+        return True
+    # Handle case where test is named after a simplified source name
+    # e.g., test_compiler.py pairs with compiler.py, even with nested paths
+    if test_basename.replace("test_", "") == source_basename or source_basename == test_basename.replace("_test", ""):
+        return True
+    # Pattern 5: Fuzzy matching for real-world naming inconsistencies
+    # e.g., compiler.py ↔ test_compile.py (one is substring of the other)
+    test_core = test_basename.replace("test_", "").replace("_test", "")
+    if test_core and source_basename:
+        if test_core in source_basename or source_basename in test_core:
+            return True
+
+    # Pattern 6: Parallel directory trees
+    # e.g., src/_pytest/python/approx.py ↔ testing/python/approx.py
+    # Strip common prefixes and compare path suffixes
+    test_stripped = test_norm
+    source_stripped = source_norm
+    for prefix in ["src/", "tests/", "testing/", "test/"]:
+        if test_stripped.startswith(prefix):
+            test_stripped = test_stripped[len(prefix):]
+        if source_stripped.startswith(prefix):
+            source_stripped = source_stripped[len(prefix):]
+
+    # If the stripped paths match (same relative path), they're a pair
+    if test_stripped == source_stripped:
         return True
 
+    # Also check if test_stripped is "test_" + source_stripped
+    if test_stripped.replace("test_", "", 1) == source_stripped:
+        return True
+
+    # Pattern 7: __init__.py handling
+    # e.g., src/werkzeug/debug/__init__.py ↔ tests/test_debug.py
+    # Use parent directory name for __init__.py files
+    if source_norm.endswith("__init__.py"):
+        # Get parent directory name: werkzeug/debug/__init__.py → debug
+        source_parent = source_norm.replace("__init__.py", "").rstrip("/").split("/")[-1]
+        if source_parent:
+            # Check if test file matches parent directory name
+            if test_basename == f"test_{source_parent}" or test_basename == f"{source_parent}_test":
+                return True
+            # Also check fuzzy match with parent directory
+            if source_parent in test_basename or test_basename.replace("test_", "").replace("_test", "") in source_parent:
+                return True
+
     return False
+
+
+def augment_with_bidirectional_test_pairs(
+    candidates: list[Symbol],
+    all_symbols: list[Symbol],
+) -> list[Symbol]:
+    """Add bidirectional test-source pairs for all candidate files.
+
+    For each source file in candidates, adds its corresponding test file(s).
+    For each test file in candidates, adds its corresponding source file.
+
+    This improves recall for tasks that require editing both implementation
+    and tests, as test files often don't match search queries directly.
+
+    Args:
+        candidates: Current candidate symbols from search
+        all_symbols: All symbols in the index
+
+    Returns:
+        Augmented list of symbols including test-source pairs
+
+    Examples:
+        >>> # candidates has symbols from compiler.py
+        >>> # Adds symbols from test_compiler.py
+        >>> augmented = augment_with_bidirectional_test_pairs(candidates, all_symbols)
+    """
+    # Build set of candidate files for quick lookup
+    candidate_files = {s.file for s in candidates}
+    candidate_ids = {s.id for s in candidates}
+    augmented = list(candidates)
+
+    # Separate test and source files from candidates
+    test_files_in_candidates = [f for f in candidate_files if "test" in f.lower()]
+    source_files_in_candidates = [f for f in candidate_files if "test" not in f.lower()]
+
+    # Create a lookup map from file to all its symbols
+    file_to_symbols: dict[str, list[Symbol]] = {}
+    for symbol in all_symbols:
+        if symbol.file not in file_to_symbols:
+            file_to_symbols[symbol.file] = []
+        file_to_symbols[symbol.file].append(symbol)
+
+    # For each source file, find its test files (source → test pairing)
+    for source_file in source_files_in_candidates:
+        for potential_test in file_to_symbols:
+            if potential_test in candidate_files:
+                continue
+            if "test" not in potential_test.lower():
+                continue
+            # Check if this is a test-source pair
+            if is_test_source_pair(potential_test, source_file):
+                # Add all symbols from the paired test file
+                for symbol in file_to_symbols[potential_test]:
+                    if symbol.id not in candidate_ids:
+                        augmented.append(symbol)
+                        candidate_ids.add(symbol.id)
+
+    # For each test file, find its source files (test → source pairing)
+    for test_file in test_files_in_candidates:
+        for potential_source in file_to_symbols:
+            if potential_source in candidate_files:
+                continue
+            if "test" in potential_source.lower():
+                continue
+            # Check if this is a test-source pair (parameters in test, source order)
+            if is_test_source_pair(test_file, potential_source):
+                # Add all symbols from the paired source file
+                for symbol in file_to_symbols[potential_source]:
+                    if symbol.id not in candidate_ids:
+                        augmented.append(symbol)
+                        candidate_ids.add(symbol.id)
+
+    return augmented
 
 
 def augment_with_test_source_pairs(
@@ -578,12 +710,14 @@ def codegraph_query(
 
     # Apply compound word splitting to query tokens
     # This enables "compile_templates" → ["compile_templates", "compile", "templates"]
+    # Note: tokenize_compound_word() returns lowercase tokens for case-insensitive matching
     expanded_query_tokens = []
     for token in query_tokens:
         compound_tokens = tokenize_compound_word(token)
         expanded_query_tokens.extend(compound_tokens)
 
-    query_tokens = expanded_query_tokens
+    # Ensure all query tokens are lowercase (tokenize_compound_word already does this)
+    query_tokens = [t.lower() for t in expanded_query_tokens]
 
     logger.debug(f"[task_028-debug] Original query: '{query}'")
     logger.debug(f"[task_028-debug] Cleaned query: '{cleaned_query}'")
@@ -718,13 +852,13 @@ def codegraph_query(
         except Exception as e:
             logger.warning(f"Import closure pruning failed: {e}")
 
-    # Step 3.5: Test-source pairing augmentation
-    # If cursor is in test file, include corresponding source files
-    if cursor_file:
-        try:
-            candidates = augment_with_test_source_pairs(cursor_file, candidates, all_symbols)
-        except Exception as e:
-            logger.warning(f"Test-source pairing failed: {e}")
+    # Step 3.5: Bidirectional test-source pairing augmentation
+    # For each source file found, add its test files (and vice versa)
+    # This improves recall when tests don't match search queries directly
+    try:
+        candidates = augment_with_bidirectional_test_pairs(candidates, all_symbols)
+    except Exception as e:
+        logger.warning(f"Test-source pairing failed: {e}")
 
     # Step 4: Expand graph (if max_depth > 0)
     # TODO: Implement graph expansion via edges table

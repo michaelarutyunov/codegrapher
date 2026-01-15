@@ -77,7 +77,7 @@ def tokenize_compound_word(identifier: str) -> List[str]:
         t_lower = t.lower()
         if len(t) > 2 and t_lower not in seen:
             seen.add(t_lower)
-            unique_tokens.append(t)
+            unique_tokens.append(t_lower)
 
     return unique_tokens
 
@@ -188,7 +188,7 @@ def tokenize_symbol(symbol: Symbol) -> List[str]:
         t_lower = t.lower()
         if len(t) > 2 and t_lower not in seen:
             seen.add(t_lower)
-            unique_tokens.append(t)
+            unique_tokens.append(t_lower)
 
     return unique_tokens
 

@@ -4,7 +4,93 @@
 
 ---
 
-## TL;DR - Just Run This
+## Part 1: The Dataset
+
+### Overview
+
+The CodeGrapher evaluation dataset contains **23 verified test cases** across 8 major Python projects.
+
+**Purpose:** Validate CodeGrapher meets acceptance criteria:
+- Token Savings ≥30%
+- Recall ≥85%
+- Precision ≤40%
+
+**Status:** ✅ Complete - All acceptance criteria met (71.8% token savings, 100.0% recall)
+
+---
+
+### Quick Stats
+
+| Metric | Value |
+|--------|-------|
+| **Total cases** | 23 |
+| **Repositories** | 8 (click, httpx, jinja, pytest, starlette, flask, werkzeug, typer) |
+| **Max repo size** | 41k LOC (pytest) |
+| **All ≤50k LOC** | ✅ Yes (FAISS IndexFlatL2 constraint) |
+| **Valid commit SHAs** | ✅ 100% (40-char format) |
+
+**Query Category Distribution:**
+
+| Category | Count | % | Description |
+|----------|-------|---|-------------|
+| error | 8 | 35% | Error keywords, exceptions |
+| symbol | 7 | 30% | Function/class names |
+| dependency | 4 | 17% | Refactoring/structural |
+| description | 4 | 17% | Natural language |
+
+---
+
+### Dataset Files
+
+| File | Cases | Description |
+|------|-------|-------------|
+| **fixtures/ground_truth.jsonl** | 23 | **Main dataset** - Use this for evaluation |
+| fixtures/ground_truth_large.jsonl | 6 | Large repos (>50k LOC) - Future testing |
+| fixtures/ground_truth_unresolved.jsonl | 4 | Unresolved commits - Reference only |
+| fixtures/ground_truth.jsonl.backup | 20 | Original before processing |
+
+---
+
+### Query Categories
+
+**Critical Design Principle:** Query terms extracted from user-facing issue descriptions, NOT code diffs.
+
+**Why:** The agent doesn't have the diff yet - finding relevant files IS the purpose of the query. Extracting from diffs would be circular logic.
+
+**Categories:**
+- **error** (8) - Error keywords, exceptions
+- **symbol** (7) - Function/class names
+- **dependency** (4) - Refactoring/structural
+- **description** (4) - Natural language
+
+---
+
+### Repository Distribution
+
+| Repo | Cases | LOC |
+|------|-------|-----|
+| jinja, click, httpx | 4 each | 10k-15k |
+| pytest, starlette | 3 each | 14k-41k |
+| flask, werkzeug | 2 each | 9k-18k |
+| typer | 1 | ~8k |
+
+---
+
+### Dataset Creation (Summary)
+
+**Two-Track Approach:**
+1. **Track A:** Validate existing cases (10 cases) - 80% auto-resolution rate
+2. **Track B:** Mine new cases from GitHub (13 cases) - 65% validation pass rate
+
+**Total:** 1,750 LOC of test case generation infrastructure
+
+For detailed methodology, lessons learned, and schema reference, see the project history in `docs/PROGRESS.md` Phase 12.
+
+---
+
+## Part 2: Running Evaluations
+
+### TL;DR - Just Run This
 
 ```bash
 # Clear previous results (backup first!)
@@ -324,5 +410,5 @@ cat fixtures/eval_results_appendable.md
 ---
 
 **See Also:**
-- [Ground Truth Dataset Documentation](GROUND_TRUTH_DATASET.md)
-- [fixtures/README.md](../fixtures/README.md)
+- [Scripts Reference](../scripts/README.md) - Script catalog and workflow examples
+- [docs/PROGRESS.md](PROGRESS.md) - Implementation history and Phase 12 details

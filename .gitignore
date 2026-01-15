@@ -208,11 +208,13 @@ __marimo__/
 
 
 # Custom
-# .claude/
+.claude/
 debug/
+dev/
 prompt.txt
+dev_narrative.md
 
 # Phase 12 Evaluation
 fixtures/test_repos/eval_repos/
-fixtures/eval_results.json
-fixtures/eval_report.md
+# fixtures/eval_results.json
+# fixtures/eval_report.md

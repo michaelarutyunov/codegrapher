@@ -118,11 +118,30 @@ class TestCompoundWordSplitting:
         assert result.count("test") == 1  # Only one "test"
         assert "test_test" in result  # Original preserved
 
-    def test_case_preservation(self):
-        """Original case preserved in result."""
+    def test_case_normalization(self):
+        """Tokens are normalized to lowercase for case-insensitive matching."""
         result = tokenize_compound_word("Test")
-        assert "Test" in result
-        # Case-insensitive deduplication means "test" won't be added if "Test" exists
+        assert "test" in result
+        assert "Test" not in result  # Original case not preserved
+
+        result = tokenize_compound_word("TestClient")
+        assert "testclient" in result
+        assert "test" in result
+        assert "client" in result
+        # All tokens are lowercase
+
+    def test_case_insensitive_matching(self):
+        """Case-insensitive matching works for compound words."""
+        # "TestClient" should produce same tokens as "testclient"
+        result1 = tokenize_compound_word("TestClient")
+        result2 = tokenize_compound_word("testclient")
+
+        # Both should contain "testclient" as the full token
+        assert "testclient" in result1
+        assert "testclient" in result2
+
+        # Component tokens should also match
+        assert set(result1) == set(result2)
 
     def test_hyphen_separated(self):
         """Hyphen-separated identifiers split correctly."""
@@ -341,6 +360,49 @@ class TestBM25Searcher:
         # After compound splitting, "compile" should match "compile_templates"
         result_ids = [sid for sid, _ in results]
         assert "test.compile_templates" in result_ids
+
+    def test_case_insensitive_search(self):
+        """BM25 search is case-insensitive."""
+        index = SparseIndex()
+
+        symbols = [
+            Symbol(
+                id="starlette.TestClient",
+                file="testclient.py",
+                signature="class TestClient:",
+                start_line=1,
+                end_line=50,
+                doc="Test client for ASGI applications.",
+                mutates="",
+                embedding=np.zeros(768, dtype=np.float32),
+            ),
+            Symbol(
+                id="other.OtherClass",
+                file="other.py",
+                signature="class OtherClass:",
+                start_line=1,
+                end_line=10,
+                doc="",
+                mutates="",
+                embedding=np.zeros(768, dtype=np.float32),
+            ),
+        ]
+
+        index.add_symbols(symbols)
+        searcher = BM25Searcher(index)
+
+        # Search with lowercase should match CamelCase symbol
+        results_lower = searcher.search(["testclient"], k=5)
+        result_ids_lower = [sid for sid, _ in results_lower]
+        assert "starlette.TestClient" in result_ids_lower
+
+        # Search with CamelCase should also match (after lowercasing)
+        results_camel = searcher.search(["TestClient"], k=5)
+        result_ids_camel = [sid for sid, _ in results_camel]
+        assert "starlette.TestClient" in result_ids_camel
+
+        # Both searches should return the same results
+        assert result_ids_lower == result_ids_camel
 
 
 class TestFilenameMatching:

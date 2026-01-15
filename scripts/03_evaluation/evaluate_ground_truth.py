@@ -1144,21 +1144,21 @@ def main():
     parser.add_argument(
         "--ground-truth",
         type=Path,
-        default=Path(__file__).parent.parent / "fixtures" / "ground_truth.jsonl",
+        default=Path(__file__).parent.parent.parent / "fixtures" / "ground_truth.jsonl",
         help="Path to ground truth JSONL file"
     )
 
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=Path(__file__).parent.parent / "fixtures" / "eval_results.json",
+        default=Path(__file__).parent.parent.parent / "fixtures" / "eval_results.json",
         help="Path to save detailed results JSON"
     )
 
     parser.add_argument(
         "--output-report",
         type=Path,
-        default=Path(__file__).parent.parent / "fixtures" / "eval_report.md",
+        default=Path(__file__).parent.parent.parent / "fixtures" / "eval_report.md",
         help="Path to save summary report markdown"
     )
 

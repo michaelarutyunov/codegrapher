@@ -134,14 +134,16 @@ python scripts/02_validation/validate_mined_cases.py \
 
 ### Run Evaluation
 
+For comprehensive evaluation instructions, modes, and WSL troubleshooting, see **[docs/EVALUATION_GUIDE.md](../docs/EVALUATION_GUIDE.md)**.
+
+**Quick reference:**
 ```bash
 # Recommended: Robust batch runner (handles WSL disconnections)
 python scripts/03_evaluation/run_eval_robust.py --mode mixed --batch-size 3
 
-# Alternative: Direct evaluation (single run)
+# Alternative: Direct evaluation
 python scripts/03_evaluation/evaluate_ground_truth.py --mixed --ground-truth fixtures/ground_truth.jsonl
-
-# If WSL disconnects, just re-run the same command - it automatically resumes!
+python scripts/03_evaluation/evaluate_ground_truth.py --simulate --ground-truth fixtures/ground_truth.jsonl
 ```
 
 ### Run Benchmarks
@@ -208,9 +210,8 @@ python scripts/02_validation/separate_large_repos.py --input fixtures/ground_tru
 
 ## Additional Documentation
 
-- **Evaluation Guide:** [docs/EVALUATION_GUIDE.md](../docs/EVALUATION_GUIDE.md)
-- **Ground Truth Dataset:** [docs/GROUND_TRUTH_DATASET.md](../docs/GROUND_TRUTH_DATASET.md)
-- **Quick Reference:** [fixtures/README.md](../fixtures/README.md)
+- **Evaluation Guide:** [docs/EVALUATION_GUIDE.md](../docs/EVALUATION_GUIDE.md) - Dataset info and evaluation workflows
+- **Implementation Progress:** [docs/PROGRESS.md](../docs/PROGRESS.md) - Phase 12 evaluation results
 
 ---
 

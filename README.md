@@ -2,7 +2,7 @@
 
 **Local MCP server for token-efficient code search.**
 
-CodeGrapher is a code understanding tool that helps AI coding agents work more efficiently with large codebases. By analyzing code structure, computing symbol importance, and using semantic search, it reduces the amount of code context sent to LLMs by **87%+** while maintaining **100% recall** of relevant files.
+CodeGrapher is a code understanding tool that helps AI coding agents work more efficiently with large codebases. By analyzing code structure, computing symbol importance, and using hybrid semantic + sparse search, it achieves **71.8% median token reduction** while finding relevant files for 65% of real-world tasks.
 
 ---
 
@@ -12,13 +12,14 @@ CodeGrapher solves the context window problem for AI-assisted development:
 
 | Problem | Solution |
 |---------|----------|
-| LLMs have limited context windows | Returns only relevant code (87% token reduction) |
-| Finding related code is manual | Semantic search + PageRank ranking |
-| Indexes get stale | Automatic file watching & incremental updates |
+| LLMs have limited context windows | Returns only relevant code (71.8% median token reduction) |
+| Finding related code is manual | Hybrid semantic + BM25 search with PageRank ranking |
+| Indexes get stale | Automatic file watching & incremental updates (~0.7ms) |
 | Sensitive data leaks | Secret detection before indexing |
 
 **Key Features:**
-- 🧠 **Semantic Code Search** - Embedding-based search finds related code by meaning, not just keywords
+- 🔍 **Hybrid Search** - Combines semantic embeddings (FAISS) + sparse BM25 search with Reciprocal Rank Fusion
+- 🧩 **Smart Pairing** - Automatically includes test files when source files are found (7 bidirectional patterns)
 - 📊 **PageRank Ranking** - Identifies high-utility functions that are called often
 - 🔄 **Incremental Updates** - Only reindexes changed files (~0.7ms per update)
 - 🎯 **Import Closure Pruning** - Limits results to files reachable from your cursor location
@@ -43,7 +44,8 @@ CodeGrapher solves the context window problem for AI-assisted development:
 CodeGrapher requires these Python packages (auto-installed):
 
 - `transformers` ≥ 4.35.0 - Embedding model (jina-embeddings-v2-base-code)
-- `faiss-cpu` ≥ 1.7.4 - Vector similarity search
+- `faiss-cpu` ≥ 1.7.4 - Vector similarity search (dense)
+- `rank-bm25` ≥ 0.2.2 - BM25 sparse search
 - `torch` ≥ 2.1.0 - PyTorch backend for embeddings
 - `networkx` ≥ 3.0 - Graph algorithms (PageRank)
 - `scipy` ≥ 1.10.0 - Sparse linear algebra
@@ -204,27 +206,49 @@ codegraph mcp-config
     ┌────▼────────┐
     │   Symbols    │ Function: database_connect()
     │   + Edges    │ └─► calls─► execute_query()
-    └────┬────────┘
-         │
-    ┌────▼─────────────┐
-    │  Embeddings      │ jina-embeddings-v2-base-code
-    │  (768-dim vectors)│
-    └────┬─────────────┘
-         │
-    ┌────▼─────────────┐
-    │  FAISS Index     │ Vector similarity search
-    │  + PageRank      │ + Importance scoring
-    └────┬─────────────┘
-         │
-    ┌────▼─────────────┐
-    │  Query Response  │ Top-K most relevant symbols
-    └───────────────────┘
+    └─────┬───────┘
+          │
+    ┌─────▼──────────────┐
+    │  Dual Indexing     │
+    ├────────────────────┤
+    │ Dense: FAISS       │ jina-embeddings-v2-base-code (768-dim vectors)
+    │ Sparse: BM25       │ Tokenized symbols (compound word splitting)
+    │ Graph: PageRank    │ Call graph importance scores
+    └─────┬──────────────┘
+          │
+    ┌─────▼──────────────┐
+    │  Hybrid Search     │ Query → Dense + Sparse results
+    │  (RRF Fusion)      │ → Reciprocal Rank Fusion
+    └─────┬──────────────┘
+          │
+    ┌─────▼──────────────┐
+    │  Smart Augment     │ + Test files (bidirectional pairing)
+    │                    │ + Import closure pruning
+    └─────┬──────────────┘
+          │
+    ┌─────▼──────────────┐
+    │  Ranked Response   │ Top-K most relevant files
+    └────────────────────┘
 ```
 
-### Scoring Formula
+### Hybrid Search Pipeline
 
-Each symbol gets a composite score:
+**1. Dual Search (Parallel)**
+- **Dense (FAISS):** Semantic similarity via embeddings → top-k symbols
+- **Sparse (BM25):** Keyword matching with compound word splitting → top-k symbols
 
+**2. Reciprocal Rank Fusion (RRF)**
+```
+score(symbol) = Σ 1/(k + rank_in_results)
+```
+Where k=60 (constant), summed across both dense and sparse rankings.
+
+**3. Augmentation**
+- **Test-Source Pairing:** Auto-include test files for matched source files (7 patterns)
+- **Import Closure:** Filter to files reachable from cursor position
+- **Filename Matching:** Boost symbols from files mentioned in query
+
+**4. Final Scoring**
 ```
 score = 0.60 × cosine_similarity
       + 0.25 × pagerank_score
@@ -232,10 +256,10 @@ score = 0.60 × cosine_similarity
       + 0.05 × is_test_file_penalty
 ```
 
-- **Cosine similarity:** Semantic match to your query (0-1)
-- **PageRank:** How often this symbol is called by others (normalized 0-1)
-- **Recency:** How recently the file was modified (7d, 30d, older)
-- **Test penalty:** Slightly penalizes test files to prioritize implementation code
+- **Cosine similarity:** Semantic match to query (0-1)
+- **PageRank:** Call graph importance (normalized 0-1)
+- **Recency:** File modification recency (7d, 30d, older)
+- **Test penalty:** Slight penalty to prioritize implementation
 
 ---
 
@@ -284,23 +308,28 @@ On a repository with ~30,000 lines of Python code:
 | Full index build | ≤ 30s | ~10-20s |
 | RAM usage (idle) | ≤ 500MB | ~300-400MB |
 
-**Token Savings:** 87% average reduction (87,105 tokens → 704,104 baseline)
+**Token Savings:** 71.8% median (range: 43.3% - 94.7% across 23 real-world tasks)
 
 ---
 
 ## Evaluation Results
 
-CodeGrapher was evaluated on 20 real-world tasks across 7 major Python projects (pytest, Flask, FastAPI, Pydantic, Click, Werkzeug, Jinja).
+CodeGrapher was evaluated on 23 real-world tasks from 7 major Python projects (pytest, Flask, FastAPI, Pydantic, Click, Werkzeug, Jinja).
 
-**Acceptance Criteria:**
+**Results:**
 
-| Criterion | Target | Result | Status |
-|-----------|--------|--------|--------|
-| Token Savings | ≥ 30% | 87.1% | ✅ PASS |
-| Recall | ≥ 85% | 100.0% | ✅ PASS |
-| Precision | ≤ 40% | 25.0% | ✅ PASS |
+| Metric | Result | Target | Status |
+|--------|--------|--------|--------|
+| **Tasks Passing (≥85% recall)** | 15/23 (65%) | ≥20/23 (≥85%) | ⚠️ Below target |
+| **Token Savings (Median)** | 71.8% | ≥30% | ✅ PASS |
+| **Precision (Median)** | 14.3% | ≤40% | ✅ PASS |
 
-See `docs/PROGRESS.md` for detailed Phase 12 evaluation results.
+**Status:** 2 of 3 criteria met. Token efficiency is excellent, but recall needs improvement (8 tasks still missing critical files).
+
+**Documentation:**
+- 📊 [Detailed Evaluation Report](fixtures/eval_report_before_after.md) - Complete before/after analysis with fix attribution
+- 📈 [Implementation Progress](docs/PROGRESS.md) - Technical implementation details and decisions
+- 🔬 [Evaluation Guide](docs/EVALUATION_GUIDE.md) - Methodology and ground truth dataset
 
 ---
 
@@ -374,8 +403,18 @@ CodeGrapher uses:
 
 ---
 
+## Contributing
+
+Contributions are welcome! See the [Implementation Progress](docs/PROGRESS.md) document for technical details and architecture decisions.
+
+**Key Resources:**
+- 📊 [Evaluation Report](fixtures/eval_report_before_after.md) - Detailed performance analysis
+- 🔬 [Evaluation Guide](docs/EVALUATION_GUIDE.md) - Testing methodology
+- 📈 [Progress Log](docs/PROGRESS.md) - Implementation history
+
+---
+
 ## Links
 
 - **Repository:** https://github.com/michaelarutyunov/codegrapher
 - **MCP Protocol:** https://modelcontextprotocol.io
-- **Documentation:** See `docs/PROGRESS.md` for implementation details
