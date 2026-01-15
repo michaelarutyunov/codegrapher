@@ -128,6 +128,32 @@ def _load_pagerank_scores(db: Database) -> dict[str, float]:
     return scores
 
 
+def _get_pagerank_score(symbol_id: str, pagerank_scores: dict[str, float]) -> float:
+    """Get PageRank score for a symbol with fallback to fuzzy lookup.
+
+    Because v1 edge extraction uses fuzzy callee IDs like <unknown>.func_name,
+    actual symbols may have low PageRank (isolated nodes) while their fuzzy
+    counterparts have high scores. We take the maximum of both.
+
+    Args:
+        symbol_id: Full symbol ID like "src.module.Class.func"
+        pagerank_scores: PageRank scores dict
+
+    Returns:
+        PageRank score (0.0 if not found)
+    """
+    # Try exact match
+    exact_score = pagerank_scores.get(symbol_id, 0.0)
+
+    # Also try fuzzy match <unknown>.<name>
+    name = symbol_id.split(".")[-1]
+    fuzzy_id = f"<unknown>.{name}"
+    fuzzy_score = pagerank_scores.get(fuzzy_id, 0.0)
+
+    # Return the maximum score (fuzzy edges may have higher centrality)
+    return max(exact_score, fuzzy_score)
+
+
 def find_repo_root() -> Optional[Path]:
     """Find the repository root by searching for .git directory.
 
@@ -216,7 +242,7 @@ def compute_weighted_scores(
         norm_cosine = (cosine_sim + 1) / 2  # map [-1,1] to [0,1]
 
         # Component 2: PageRank centrality (0-1)
-        raw_pr = pagerank_scores.get(symbol.id, 0.0)
+        raw_pr = _get_pagerank_score(symbol.id, pagerank_scores)
         norm_pr = raw_pr / max_pr if max_pr > 0 else 0.0
 
         # Component 3: Recency (piecewise constant)
@@ -865,6 +891,7 @@ def codegraph_query(
     # For v1, we skip this step
 
     # Step 5: Compute weighted scores
+    pagerank: dict[str, float] = {}  # Initialize in case score computation fails
     try:
         pagerank = _load_pagerank_scores(db)
         git_log_data = get_git_log(repo_root)
@@ -884,11 +911,14 @@ def codegraph_query(
     # Build response
     files = []
     for symbol in selected:
+        # Get PageRank score for this symbol (0.0 if not found)
+        pr_score = _get_pagerank_score(symbol.id, pagerank)
         files.append({
             "path": symbol.file,
             "line_range": [symbol.start_line, symbol.end_line],
             "symbol": symbol.id,
             "excerpt": symbol.signature,
+            "pagerank_score": round(pr_score, 6),
         })
 
     return {

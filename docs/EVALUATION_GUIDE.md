@@ -2,6 +2,30 @@
 
 **Quick Reference:** How to run evaluations on the ground truth dataset, especially on WSL with memory constraints.
 
+## Contents
+
+- [Part 1: The Dataset](#part-1-the-dataset)
+  - [Overview](#overview)
+  - [Quick Stats](#quick-stats)
+  - [Dataset Files](#dataset-files)
+  - [Query Categories](#query-categories)
+  - [Repository Distribution](#repository-distribution)
+- [Part 2: Running Evaluations](#part-2-running-evaluations)
+  - [TL;DR - Just Run This](#tldr---just-run-this)
+  - [Problem: WSL Disconnections During Evaluation](#problem-wsl-disconnections-during-evaluation)
+  - [Solution: Robust Batch Runner](#solution-robust-batch-runner)
+    - [Option 1: Python Robust Runner (RECOMMENDED)](#option-1-python-robust-runner-recommended)
+    - [Option 2: Bash Batch Runner (Alternative)](#option-2-bash-batch-runner-alternative)
+    - [Option 3: Direct Evaluation (Single Run)](#option-3-direct-evaluation-single-run)
+  - [Evaluation Modes](#evaluation-modes)
+  - [Batch Size Tuning](#batch-size-tuning)
+  - [Before Running Evaluation](#before-running-evaluation)
+  - [During Evaluation](#during-evaluation)
+  - [After Evaluation](#after-evaluation)
+  - [Troubleshooting](#troubleshooting)
+  - [Example: Full Workflow](#example-full-workflow)
+  - [Summary](#summary)
+
 ---
 
 ## Part 1: The Dataset
@@ -73,18 +97,6 @@ The CodeGrapher evaluation dataset contains **23 verified test cases** across 8 
 | pytest, starlette | 3 each | 14k-41k |
 | flask, werkzeug | 2 each | 9k-18k |
 | typer | 1 | ~8k |
-
----
-
-### Dataset Creation (Summary)
-
-**Two-Track Approach:**
-1. **Track A:** Validate existing cases (10 cases) - 80% auto-resolution rate
-2. **Track B:** Mine new cases from GitHub (13 cases) - 65% validation pass rate
-
-**Total:** 1,750 LOC of test case generation infrastructure
-
-For detailed methodology, lessons learned, and schema reference, see the project history in `docs/PROGRESS.md` Phase 12.
 
 ---
 
@@ -243,6 +255,8 @@ rm fixtures/eval_results_appendable.md
 ```
 
 **Why?** The `--appendable` flag appends results. Running twice would duplicate entries.
+
+**Note:** The default output file is `fixtures/eval_results_appendable.md` when using `run_eval_robust.py` (the recommended approach). You can specify a custom output file with `--output-report <path>` if needed.
 
 ---
 

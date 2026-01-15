@@ -172,7 +172,8 @@ class TestCmdQuery:
                     "path": "test.py",
                     "line_range": [1, 10],
                     "symbol": "test.function",
-                    "excerpt": "def test():"
+                    "excerpt": "def test():",
+                    "pagerank_score": 0.001234,
                 }
             ],
             "tokens_used": 100,
