@@ -119,13 +119,35 @@ codegraph build --full
 
 **First build time:** ~10-30 seconds for a 10k LOC project (varies by size).
 
-### 3. Query CodeGrapher
+### 3. Query CodeGrapher (CLI)
 
 ```bash
 codegraph query "database connection pooling"
 ```
 
-Or use via MCP in Claude Code → the `codegraph_query` tool will be available.
+### 4. (Optional) Use with Claude Code via MCP
+
+To make the `codegraph_query` tool available in Claude Code:
+
+1. **From your project directory, start Claude Code:**
+   ```bash
+   cd /path/to/your/repo
+   claude
+   ```
+
+2. **Open MCP manager:** Type `/mcp`
+
+3. **Add server** with these settings:
+   - Type: `stdio`
+   - Command: `python3`
+   - Args: `-m codegrapher.server`
+   - Environment:
+     - `PYTHONPATH` = path to your `src/` directory (e.g., `/path/to/codegrapher/src`)
+     - `PROJECT_ROOT` = path to your project root
+
+4. **Restart Claude Code** completely (`exit` or `Ctrl+D`)
+
+See [MCP Integration](#mcp-integration) for detailed configuration options.
 
 ---
 
@@ -166,9 +188,63 @@ codegraph mcp-config > ~/.config/claude/mcp_config.json
 
 ## MCP Integration
 
-CodeGrapher works as an MCP (Model Context Protocol) server. Configure it in your MCP client config:
+CodeGrapher works as an MCP (Model Context Protocol) server. There are two ways to use it:
 
-### Claude Desktop
+### Option 1: Claude Code CLI (Recommended for terminal use)
+
+If you're using Claude Code from the terminal (`claude` command), configure it per-project:
+
+1. **Start from your project directory:**
+   ```bash
+   cd ~/projects/codegrapher
+   claude
+   ```
+
+2. **Run the MCP manager:**
+   ```
+   /mcp
+   ```
+
+3. **Add the server** with these settings:
+   - **Type:** stdio
+   - **Command:** `python3`
+   - **Args:** `-m codegrapher.server`
+   - **Environment:**
+     ```
+     PYTHONPATH=/home/mikhailarutyunov/projects/codegrapher/src
+     PROJECT_ROOT=/home/mikhailarutyunov/projects/codegrapher
+     ```
+   *(Adjust paths to match your project location)*
+
+4. **Verify** with `/mcp` - you should see `codegrapher · ✔ connected`
+
+**Or edit `~/.claude.json` directly:**
+
+Add to your project's entry under `projects.{your_project_path}.mcpServers`:
+
+```json
+{
+  "projects": {
+    "/home/mikhailarutyunov/projects/codegrapher": {
+      "mcpServers": {
+        "codegrapher": {
+          "type": "stdio",
+          "command": "python3",
+          "args": ["-m", "codegrapher.server"],
+          "env": {
+            "PYTHONPATH": "/home/mikhailarutyunov/projects/codegrapher/src",
+            "PROJECT_ROOT": "/home/mikhailarutyunov/projects/codegrapher"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Then restart Claude Code completely (`exit` or `Ctrl+D`) and start a new session.
+
+### Option 2: Claude Desktop App
 
 **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
@@ -178,17 +254,19 @@ CodeGrapher works as an MCP (Model Context Protocol) server. Configure it in you
   "mcpServers": {
     "codegrapher": {
       "command": "/path/to/codegrapher/.venv/bin/python",
-      "args": ["/path/to/codegrapher/src/codegrapher/server.py"]
+      "args": ["-m", "codegrapher.server"],
+      "cwd": "/path/to/codegrapher"
     }
   }
 }
 ```
 
-Or generate the config automatically:
-
-```bash
-codegraph mcp-config
-```
+★ Insight ─────────────────────────────────────
+MCP Config Key Differences
+- Claude Code CLI: Project-specific config in `~/.claude.json` with `type: "stdio"` required
+- Claude Desktop: Global config file, `cwd` parameter instead of `PYTHONPATH`
+- Use `PYTHONPATH` env var for more portable configuration across working directories
+─────────────────────────────────────────────────
 
 ---
 
@@ -384,6 +462,45 @@ swap=4GB
 ```
 
 Then restart WSL: `wsl --shutdown` from PowerShell.
+
+### MCP Server Not Appearing in Claude Code
+
+If the `codegraph_query` tool doesn't show up after configuring MCP:
+
+1. **Verify you're editing the correct config file:**
+   - Claude Code CLI uses: `~/.claude.json` (project-specific under `projects.{path}.mcpServers`)
+   - Claude Desktop uses: `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
+
+2. **Ensure `type: "stdio"` is set** (required for Claude Code CLI)
+
+3. **Check PYTHONPATH points to `src/` directory**, not project root
+
+4. **Restart Claude Code completely** (`exit` or `Ctrl+D`, then start fresh)
+
+5. **Start Claude Code from your project directory:**
+   ```bash
+   cd /path/to/your/project
+   claude
+   ```
+
+6. **Verify with `/mcp`** - should show `codegrapher · ✔ connected`
+
+### MCP Server Starts But Tool Not Available
+
+This usually means the module import is failing:
+
+```bash
+# Test server startup manually
+PYTHONPATH=/path/to/project/src python3 -m codegrapher.server
+
+# Should show: "Starting MCP server 'codegrapher' with transport 'stdio'"
+# and list available tools including 'codegraph_query'
+```
+
+If this fails, check:
+- Python version is 3.10+
+- All dependencies installed: `pip install -e .`
+- PYTHONPATH includes the `src/` directory
 
 ---
 
