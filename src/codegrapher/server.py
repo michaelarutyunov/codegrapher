@@ -13,6 +13,7 @@ Per PRD Section 6:
 import json
 import logging
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -1094,7 +1095,7 @@ def codegraph_refresh(mode: str = "incremental") -> dict:
         if mode == "full":
             # Full rebuild - use subprocess to call CLI
             result = subprocess.run(
-                ["codegraph", "build", "--full"],
+                [sys.executable, "-m", "codegrapher.cli", "build", "--full"],
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
@@ -1163,7 +1164,7 @@ def codegraph_refresh(mode: str = "incremental") -> dict:
 
             # Run update command
             result = subprocess.run(
-                ["codegraph", "update", "--git-changed"],
+                [sys.executable, "-m", "codegrapher.cli", "update", "--git-changed"],
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
