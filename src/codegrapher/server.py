@@ -652,30 +652,83 @@ def codegraph_query(
     _max_depth: int = DEFAULT_MAX_DEPTH,  # TODO: v2 graph expansion
     token_budget: int = DEFAULT_TOKEN_BUDGET,
 ) -> dict:
-    """Query the CodeGrapher index for relevant code symbols.
+    """Search code using semantic/conceptual understanding.
 
-    Returns a ranked list of code symbols matching the query,
-    optimized for token efficiency with import closure pruning.
+    CodeGrapher uses hybrid retrieval (vector similarity + keyword search + call graph)
+    to find code based on meaning, not just literal text matches.
+
+    **When to use CodeGrapher:**
+    - Conceptual queries: "authentication logic", "error handling for API calls"
+    - Finding related code: "database connection setup", "template rendering"
+    - Understanding relationships: "what calls this function", "where is X used"
+
+    **When NOT to use CodeGrapher:**
+    - Exact string matches → Use grep (e.g., "TODO", "FIXME")
+    - File name patterns → Use file system tools (e.g., "*.test.py")
+    - Broad exploration → Use file browser or directory listing
+
+    **Parameters guide:**
+
+    - query: Natural language or technical terms. Examples:
+      * "user authentication and session management"
+      * "parse configuration files"
+      * "handle 404 errors"
+
+    - cursor_file: Contextual filtering based on imports.
+      When provided, only returns symbols reachable through the import graph
+      from this file (symbols it imports OR symbols that reference it).
+      Use when: Working within a specific file and want related symbols only.
+      Example: cursor_file="src/auth/validator.py" filters to auth-related code.
+
+    - max_depth: Graph expansion (currently not implemented in v1).
+      Future: 0=exact matches, 1=+neighbors, 2-3=broader context.
+
+    - token_budget: Response size limit (default 3500 tokens ≈ 900 words).
+      If truncated=true in results, increase this value to see more symbols.
+      Note: Truncation always breaks at file boundaries (never mid-file).
+
+    **Results ranking:**
+    Symbols are ranked by:
+    1. Semantic relevance to your query (60% weight)
+    2. PageRank centrality score (25% weight) - higher = more central "hub" in codebase
+    3. Recency (10% weight) - recently modified files rank higher
+    4. Test files (5% boost) - ensures tests are included
+
+    PageRank score interpretation:
+    - 0.10+ = Core/central class used by many components
+    - 0.05-0.10 = Important utility or service
+    - 0.01-0.05 = Supporting function or helper
+    - <0.01 = Leaf node or rarely referenced
 
     Args:
         query: Search query (symbol name, description, or keywords)
-        cursor_file: Optional file path for import-closure pruning.
-                   If provided, only returns symbols reachable from this file.
-        max_depth: Graph hop depth for expansion (0-3, default 1).
-                   Higher values include more related symbols.
-        token_budget: Maximum tokens in response (default 3500).
-                     Response is truncated at file boundaries if exceeded.
+        cursor_file: Optional file path for import-based filtering
+        max_depth: Graph hop depth for expansion (0-3, default 1)
+        token_budget: Maximum tokens in response (default 3500)
 
     Returns:
         Dictionary with:
         - status: "success" or "error"
-        - files: List of matching file entries (if successful)
-        - tokens_used: Number of tokens used
+        - files: List of matching symbols with path, line range, signature, PageRank score
+        - tokens_used: Actual tokens used in response
         - total_symbols: Number of symbols returned
-        - truncated: True if results were truncated due to token_budget
-        - total_candidates: Total candidates before truncation
-        - error_type: Error type code (if error)
-        - message: Error message (if error)
+        - truncated: True if results exceeded token_budget
+        - total_candidates: Total matches before truncation (shows what you're missing)
+        - error_type: Error code if failed (index_not_found, index_corrupt, etc.)
+        - message: Human-readable error explanation
+
+    Examples:
+        # Find authentication logic
+        >>> codegraph_query(query="user authentication")
+        # Returns: AuthService, TokenValidator, login functions...
+
+        # Find code related to current file
+        >>> codegraph_query(query="error handling", cursor_file="src/api/routes.py")
+        # Returns: Only error handling code reachable from routes.py
+
+        # Get more results if truncated
+        >>> codegraph_query(query="database queries", token_budget=5000)
+        # Returns: More symbols by increasing budget
     """
     # Find repository root
     repo_root = find_repo_root()
