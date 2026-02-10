@@ -127,13 +127,16 @@ class Database:
             # Use URI mode to explicitly open in read-write mode
             db_uri = f"file:{self.db_path}?mode=rw"
             try:
-                self._conn = sqlite3.connect(db_uri, uri=True)
+                self._conn = sqlite3.connect(db_uri, uri=True, timeout=30.0)
             except sqlite3.OperationalError:
                 # Database doesn't exist yet, create it
-                self._conn = sqlite3.connect(self.db_path)
+                self._conn = sqlite3.connect(self.db_path, timeout=30.0)
                 self._conn.row_factory = sqlite3.Row
             else:
                 self._conn.row_factory = sqlite3.Row
+
+            # Enable WAL mode immediately on connection for better concurrency
+            self._conn.execute("PRAGMA journal_mode=WAL")
         return self._conn
 
     def close(self) -> None:
@@ -146,8 +149,15 @@ class Database:
         """Create database schema if tables don't exist.
 
         Creates symbols, edges, index_meta, and sparse_terms tables.
+        Enables WAL mode for better concurrency (allows simultaneous reads during writes).
         """
         conn = self.connect()
+
+        # Enable WAL mode for better concurrency
+        # This allows multiple readers + 1 writer simultaneously
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")  # Faster while still safe with WAL
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS symbols (
                 id TEXT PRIMARY KEY,
