@@ -661,6 +661,9 @@ def codegraph_query(
     - Conceptual queries: "authentication logic", "error handling for API calls"
     - Finding related code: "database connection setup", "template rendering"
     - Understanding relationships: "what calls this function", "where is X used"
+    - Finding method callers: "methods that call compute_pagerank", "what uses extract_edges"
+    - Understanding inheritance: "subclasses of Exception", "who inherits from BaseModel"
+    - Tracing usage patterns: "where is TokenValidator used", "what uses Database class"
 
     **When NOT to use CodeGrapher:**
     - Exact string matches → Use grep (e.g., "TODO", "FIXME")
@@ -700,6 +703,12 @@ def codegraph_query(
     - 0.01-0.05 = Supporting function or helper
     - <0.01 = Leaf node or rarely referenced
 
+    **Call graph resolution (v1.5 - Named Fuzzy Edges):**
+    - Same-file inheritance: Fully resolved (e.g., Derived.method → Base.method)
+    - Cross-file inheritance: Contextual fuzzy (e.g., Derived.method → Derived.parent_method)
+    - Direct calls: Clean format (e.g., "foo", "obj.method")
+    - Legacy fuzzy: <5% of edges remain as "<unknown>.name" (unresolved edge cases)
+
     Args:
         query: Search query (symbol name, description, or keywords)
         cursor_file: Optional file path for import-based filtering
@@ -729,6 +738,18 @@ def codegraph_query(
         # Get more results if truncated
         >>> codegraph_query(query="database queries", token_budget=5000)
         # Returns: More symbols by increasing budget
+
+        # NEW: Finding method callers (improved resolution)
+        >>> codegraph_query(query="methods that call compute_pagerank")
+        # Returns: extract_edges_from_file, cli commands, server endpoints using it
+
+        # NEW: Finding inheritance relationships
+        >>> codegraph_query(query="subclasses of Exception")
+        # Returns: SecretFoundError, classes that inherit from Exception
+
+        # NEW: Finding database interaction patterns
+        >>> codegraph_query(query="classes using method get_all_symbols")
+        # Returns: Server, CLI, any code that queries the database
     """
     # Find repository root
     repo_root = find_repo_root()

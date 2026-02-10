@@ -161,6 +161,7 @@ See [MCP Integration](#mcp-integration) for detailed configuration options.
 | `codegraph update [file]` | Incremental update for changed files |
 | `codegraph update --git-changed` | Update all files changed since last commit |
 | `codegraph watch` | Watch for file changes and auto-update the index (foreground) |
+| `codegraph callers <symbol>` | Find symbols that call the given symbol |
 | `codegraph mcp-config` | Generate MCP server configuration |
 
 ### MCP Tools (Available in Claude Code)
@@ -191,6 +192,12 @@ codegraph update src/auth.py
 
 # Update all changed files
 codegraph update --git-changed
+
+# Find callers of a specific symbol
+codegraph callers extract_edges_from_file
+
+# Find callers with JSON output for scripting
+codegraph callers --json --limit 50 Database.get_all_symbols
 
 # Generate MCP config for Claude Code
 codegraph mcp-config > ~/.config/claude/mcp_config.json
@@ -339,6 +346,147 @@ score = 0.60 × cosine_similarity
 - **PageRank:** Call graph importance (normalized 0-1)
 - **Recency:** File modification recency (7d, 30d, older)
 - **Test penalty:** Slight penalty to prioritize implementation
+
+---
+
+## Call Graph Features
+
+### Named Fuzzy Edges (v1.5)
+
+CodeGrapher now extracts call graph edges with contextual names instead of generic `<unknown>` prefixes:
+
+| Before | After |
+|--------|-------|
+| `<unknown>.self.B1` | `c2.A2.B1` (contextual) |
+| `<unknown>.self.B1` | `c1.A1.B1` (resolved, same-file inheritance) |
+
+This enables queries like:
+- "methods that call B1" → finds actual callers
+- "what uses Database.get_all_symbols" → shows usage patterns
+
+### 1-Level Inheritance Resolution
+
+For classes in the same file, CodeGrapher resolves inherited method calls:
+
+```python
+# c1.py
+class Base:
+    def helper(self): pass
+
+class Derived(Base):
+    def method(self):
+        self.helper()  # → Resolved to Base.helper!
+```
+
+**Limitation:** Cross-file inheritance falls back to contextual fuzzy (e.g., `c2.A2.B1` instead of `c1.A1.B1`). Full cross-file resolution requires import analysis and is planned for v2.
+
+### Finding Callers with CLI
+
+Use the `callers` command to find what calls a given symbol:
+
+```bash
+# Find callers of a function
+codegraph callers extract_edges_from_file
+
+# Output shows:
+# - Caller symbol ID
+# - File location
+# - Line number
+# - Signature
+# - PageRank importance badge ([core], [important], [helper])
+
+# JSON output for scripting
+codegraph callers --json --limit 50 Database.get_all_symbols | jq '.callers[] | .caller_id'
+```
+
+---
+
+## Comparison with Full Resolution Tools
+
+| Feature | CodeGrapher v1.5 | Pyright/mypy | pyan |
+|---------|-------------------|--------------|------|
+| **Type inference** | None | Full | None |
+| **Inheritance resolution** | 1-level, same-file | Full | Import-based |
+| **Import resolution** | File-level only | Full | Full |
+| **Call graph extraction** | AST + fuzzy | Semantic | AST |
+| **Index build time** | ~3 min (1K files) | ~30 sec | ~10 sec |
+| **Query speed** | ~50-100ms | Instant | Instant |
+| **Use case** | Semantic search | Type checking | Visualization |
+
+**When to use CodeGrapher:**
+- Exploring unfamiliar codebases
+- Semantic code search ("authentication logic")
+- Understanding call patterns
+- Quick navigation without IDE
+
+**When to use full resolution tools:**
+- Type checking before commits
+- Finding type errors
+- Complete accuracy required
+- IDE integration (real-time analysis)
+
+---
+
+## Current Limitations
+
+### Known Constraints
+
+1. **Cross-file inheritance**
+   - Falls back to contextual fuzzy (e.g., `Derived.parent_method`)
+   - Full resolution planned for v2
+
+2. **Multiple inheritance**
+   - Only checks first parent for 1-level MRO
+   - Covers ~80% of single-inheritance cases
+
+3. **Nested classes**
+   - Parser extracts top-level definitions only
+   - Inner classes not indexed
+
+4. **Dynamic features**
+   - No runtime behavior analysis
+   - Decorators like `@property` not specially handled
+   - Metaclasses not understood
+
+5. **`super()` calls**
+   - Partially handled (extracted as `super.method` not fully resolved)
+
+### Edge Case Behavior
+
+| Pattern | Resolution |
+|---------|------------|
+| `self.method()` in same class | `Class.method` (resolved) |
+| `self.method()` (inherited) | `BaseClass.method` (resolved, same-file) |
+| `self.method()` (cross-file) | `CurrentClass.method` (fuzzy) |
+| `super().method()` | `super().method` (as-is) |
+| `obj.method()` | `obj.method` (unchanged) |
+| `cls.method()` | `Class.method` (resolved) |
+
+---
+
+## Roadmap
+
+### Planned Enhancements
+
+#### Near-term (v1.6-v1.7)
+
+- [ ] **`codegraph hierarchy` command** - Show class inheritance tree
+- [ ] **`codegraph broken` command** - Find potential broken references
+- [ ] **Import-aware edge resolution** - Resolve cross-file inheritance
+
+#### Mid-term (v2.0)
+
+- [ ] **Full cross-file resolution** - Resolve calls across files
+- [ ] **Multiple inheritance MRO** - Follow Python's C3 linearization
+- [ ] **`super()` call resolution** - Properly handle `super().method()`
+- [ ] **Edge validation** - Detect calls to non-existent methods
+
+#### Future Considerations
+
+- [ ] **Type-aware resolution** - Use type hints for better accuracy
+- [ ] **Decorator handling** - Properly handle `@property`, `@staticmethod`
+- [ ] **Nested class support** - Index inner classes and methods
+- [ ] **Incremental PageRank** - Update scores without full recomputation
 
 ---
 

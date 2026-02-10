@@ -56,6 +56,7 @@ codegraph-query = "codegrapher.cli:query_command"
 codegraph-update = "codegrapher.cli:update_command"
 codegraph-mcp-config = "codegrapher.cli:mcp_config_command"
 codegraph-watch = "codegrapher.cli:watch_command"
+codegraph-callers = "codegrapher.cli:callers_command"
 
 [project.urls]
 Homepage = "https://github.com/codegrapher/codegrapher"

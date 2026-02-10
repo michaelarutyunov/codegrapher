@@ -44,7 +44,9 @@ def find_root() -> Path:
     """Find repository root, exit with error if not found."""
     root = find_repo_root()
     if root is None:
-        print("Error: Not in a git repository (no .git directory found)", file=sys.stderr)
+        print(
+            "Error: Not in a git repository (no .git directory found)", file=sys.stderr
+        )
         print("Run from within a git repository.", file=sys.stderr)
         sys.exit(1)
     return root
@@ -180,7 +182,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             print("Warning: Failed to install git hook", file=sys.stderr)
 
     print("\nInitialization complete!")
-    print(f"Run 'codegraph build --full' to build the index.")
+    print("Run 'codegraph build --full' to build the index.")
 
 
 def cmd_build(args: argparse.Namespace) -> None:
@@ -193,7 +195,10 @@ def cmd_build(args: argparse.Namespace) -> None:
     if not args.full and not args.force:
         if db_path.exists() or faiss_path.exists():
             print("Error: Index already exists.", file=sys.stderr)
-            print("Use --full to rebuild the index, or 'codegraph update' for incremental updates.", file=sys.stderr)
+            print(
+                "Use --full to rebuild the index, or 'codegraph update' for incremental updates.",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     print(f"Building index for repository: {root}")
@@ -269,7 +274,7 @@ def cmd_build(args: argparse.Namespace) -> None:
     all_symbols = generate_symbol_embeddings(all_symbols, model)
     print("Embeddings generated!")
 
-    print(f"\nStoring symbols in database...")
+    print("\nStoring symbols in database...")
     for symbol in all_symbols:
         db.insert_symbol(symbol)
     print(f"Stored {len(all_symbols)} symbols")
@@ -279,7 +284,7 @@ def cmd_build(args: argparse.Namespace) -> None:
         db.insert_edge(edge)
     print("Edges stored!")
 
-    print(f"\nBuilding FAISS index...")
+    print("\nBuilding FAISS index...")
     faiss_manager.add_symbols(all_symbols)
     faiss_manager.save()
     print("FAISS index built!")
@@ -316,7 +321,7 @@ def cmd_query(args: argparse.Namespace) -> None:
         query=args.query,
         cursor_file=args.cursor_file,
         _max_depth=args.max_depth,
-        token_budget=args.token_budget
+        token_budget=args.token_budget,
     )
 
     if args.json:
@@ -333,13 +338,13 @@ def cmd_query(args: argparse.Namespace) -> None:
     print(f"Query: {args.query}")
     print(f"Tokens used: {result['tokens_used']}/{args.token_budget}")
     print(f"Symbols returned: {result['total_symbols']}")
-    if result.get('truncated'):
+    if result.get("truncated"):
         print("(results truncated by token budget)")
 
     # Group by file
     files_by_path = {}
-    for entry in result['files']:
-        path = entry['path']
+    for entry in result["files"]:
+        path = entry["path"]
         if path not in files_by_path:
             files_by_path[path] = []
         files_by_path[path].append(entry)
@@ -349,7 +354,9 @@ def cmd_query(args: argparse.Namespace) -> None:
     for file_path, symbols in files_by_path.items():
         print(f"\n{file_path}:")
         for sym in symbols:
-            print(f"  Lines {sym['line_range'][0]}-{sym['line_range'][1]}: {sym['symbol']}")
+            print(
+                f"  Lines {sym['line_range'][0]}-{sym['line_range'][1]}: {sym['symbol']}"
+            )
             print(f"    {sym['excerpt'][:100]}...")
 
 
@@ -361,7 +368,10 @@ def cmd_update(args: argparse.Namespace) -> None:
     faiss_path = index_dir / "index.faiss"
 
     if not db_path.exists() or not faiss_path.exists():
-        print("Error: Index not found. Run 'codegraph build --full' first.", file=sys.stderr)
+        print(
+            "Error: Index not found. Run 'codegraph build --full' first.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     files_to_update = []
@@ -453,7 +463,9 @@ def cmd_update(args: argparse.Namespace) -> None:
                             symbol.signature + " " + (symbol.doc or "")
                         )
                         db.update_symbol(symbol)
-            print(f"OK ({len(diff.added)} added, {len(diff.modified)} modified, {len(diff.deleted)} deleted)")
+            print(
+                f"OK ({len(diff.added)} added, {len(diff.modified)} modified, {len(diff.deleted)} deleted)"
+            )
             updated_count += 1
         except Exception as e:
             print(f"ERROR: {e}")
@@ -466,6 +478,104 @@ def cmd_update(args: argparse.Namespace) -> None:
     print("=" * 50)
     print(f"Files updated: {updated_count}")
     print(f"Files skipped: {skipped_count}")
+
+
+def cmd_callers(args: argparse.Namespace) -> None:
+    """Find symbols that call the given symbol.
+
+    Queries the edges table for call edges where callee_id matches
+    the given pattern, then enriches results with symbol information.
+
+    Examples:
+        codegraph callers extract_edges_from_file
+        codegraph callers Database.get_all_symbols
+        codegraph callers --json TokenValidator
+    """
+    root = find_root()
+    index_dir = get_index_path(root)
+    db_path = index_dir / "symbols.db"
+
+    if not db_path.exists():
+        print("Error: Index not found.", file=sys.stderr)
+        print("Run 'codegraph build --full' first.", file=sys.stderr)
+        sys.exit(1)
+
+    db = Database(db_path)
+
+    # Query for callers
+    # First try exact match
+    symbol_pattern = args.symbol
+    all_callers = db.get_callers_for_symbol(symbol_pattern)
+
+    if not all_callers:
+        print(f"No callers found for '{args.symbol}'")
+        print()
+        print("Tips:")
+        print("  - Use the full symbol ID (e.g., 'module.Class.method')")
+        print("  - Symbols are case-sensitive")
+        print("  - Use 'codegraph query' to search for symbols by name")
+        return
+
+    # Sort by PageRank score if available
+    pagerank = {}
+    try:
+        # Try to load cached PageRank scores
+        from codegrapher.graph import compute_pagerank
+
+        pagerank = compute_pagerank(db)
+    except Exception:
+        pass  # PageRank not available, all scores will be 0
+
+    # Enrich with symbol information
+    enriched_callers = []
+    for caller_id in all_callers:
+        symbol = db.get_symbol(caller_id)
+        if symbol:
+            enriched_callers.append(
+                {
+                    "caller_id": caller_id,
+                    "file": symbol.file,
+                    "start_line": symbol.start_line,
+                    "signature": symbol.signature,
+                    "pagerank": pagerank.get(caller_id, 0.0),
+                }
+            )
+
+    # Sort by PageRank score (descending)
+    enriched_callers.sort(key=lambda x: x["pagerank"], reverse=True)
+
+    # Apply limit
+    limited_callers = enriched_callers[: args.limit]
+
+    # Output
+    if args.json:
+        result = {
+            "symbol_id": args.symbol,
+            "callers": limited_callers,
+            "total_callers": len(enriched_callers),
+            "truncated": len(enriched_callers) > args.limit,
+        }
+        print(json.dumps(result, indent=2))
+    else:
+        print(f"Callers of {args.symbol} (found {len(enriched_callers)} total)")
+        if len(enriched_callers) > args.limit:
+            print(f"  (showing top {args.limit}, use --limit N to see more)")
+        print()
+
+        for i, caller in enumerate(limited_callers, 1):
+            pagerank_note = ""
+            if caller["pagerank"] > 0:
+                if caller["pagerank"] >= 0.1:
+                    pagerank_note = " [core]"
+                elif caller["pagerank"] >= 0.05:
+                    pagerank_note = " [important]"
+                elif caller["pagerank"] >= 0.01:
+                    pagerank_note = " [helper]"
+
+            print(f"{i}. {caller['caller_id']} {pagerank_note}")
+            print(f"   Location: {caller['file']}:{caller['start_line']}")
+            print(f"   Signature: {caller['signature'][:80]}")
+            print()
 
 
 def cmd_mcp_config(args: argparse.Namespace) -> None:
@@ -486,7 +596,10 @@ def cmd_watch(args: argparse.Namespace) -> None:
     # Check if index exists
     if not index_path.exists():
         print(f"Error: Index not found at {index_path}", file=sys.stderr)
-        print("Run 'codegraph init' followed by 'codegraph build --full' first.", file=sys.stderr)
+        print(
+            "Run 'codegraph init' followed by 'codegraph build --full' first.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Initialize components
@@ -512,6 +625,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
         watcher.start()
         # Keep the main thread alive
         import signal
+
         signal.pause()  # Wait for signal (Ctrl+C)
     except KeyboardInterrupt:
         print("\nStopping watcher...")
@@ -528,53 +642,95 @@ def create_parser() -> argparse.ArgumentParser:
     """Create the main argument parser."""
     parser = argparse.ArgumentParser(
         description="CodeGrapher: Token-efficient code search for Python repositories",
-        prog="codegraph"
+        prog="codegraph",
     )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version="CodeGrapher 1.0.0"
-    )
+    parser.add_argument("--version", action="version", version="CodeGrapher 1.0.0")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # init subcommand
-    init_parser = subparsers.add_parser("init", help="Initialize CodeGrapher in a repository")
-    init_parser.add_argument("--no-model", action="store_true", help="Skip model download")
-    init_parser.add_argument("--no-hook", action="store_true", help="Skip git hook installation")
+    init_parser = subparsers.add_parser(
+        "init", help="Initialize CodeGrapher in a repository"
+    )
+    init_parser.add_argument(
+        "--no-model", action="store_true", help="Skip model download"
+    )
+    init_parser.add_argument(
+        "--no-hook", action="store_true", help="Skip git hook installation"
+    )
     init_parser.set_defaults(func=cmd_init)
 
     # build subcommand
     build_parser = subparsers.add_parser("build", help="Build the CodeGrapher index")
-    build_parser.add_argument("--full", action="store_true", help="Perform a full rebuild")
-    build_parser.add_argument("--force", action="store_true", help="Force rebuild even if index exists")
+    build_parser.add_argument(
+        "--full", action="store_true", help="Perform a full rebuild"
+    )
+    build_parser.add_argument(
+        "--force", action="store_true", help="Force rebuild even if index exists"
+    )
     build_parser.set_defaults(func=cmd_build)
 
     # query subcommand
     query_parser = subparsers.add_parser("query", help="Query the CodeGrapher index")
     query_parser.add_argument("query", help="Search query")
-    query_parser.add_argument("--cursor-file", help="File path for import-closure pruning")
-    query_parser.add_argument("--max-depth", type=int, default=1, help="Graph hop depth (default: 1)")
-    query_parser.add_argument("--token-budget", type=int, default=DEFAULT_TOKEN_BUDGET,
-                            help="Maximum tokens in response")
-    query_parser.add_argument("--json", action="store_true", help="Output results as JSON")
+    query_parser.add_argument(
+        "--cursor-file", help="File path for import-closure pruning"
+    )
+    query_parser.add_argument(
+        "--max-depth", type=int, default=1, help="Graph hop depth (default: 1)"
+    )
+    query_parser.add_argument(
+        "--token-budget",
+        type=int,
+        default=DEFAULT_TOKEN_BUDGET,
+        help="Maximum tokens in response",
+    )
+    query_parser.add_argument(
+        "--json", action="store_true", help="Output results as JSON"
+    )
     query_parser.set_defaults(func=cmd_query)
 
     # update subcommand
-    update_parser = subparsers.add_parser("update", help="Update the index for changed files")
+    update_parser = subparsers.add_parser(
+        "update", help="Update the index for changed files"
+    )
     update_parser.add_argument("file", nargs="?", help="Single file to update")
-    update_parser.add_argument("--git-changed", action="store_true",
-                             help="Update all git-changed Python files")
+    update_parser.add_argument(
+        "--git-changed", action="store_true", help="Update all git-changed Python files"
+    )
     update_parser.set_defaults(func=cmd_update)
 
     # mcp-config subcommand
-    mcp_config_parser = subparsers.add_parser("mcp-config", help="Generate MCP server configuration")
+    mcp_config_parser = subparsers.add_parser(
+        "mcp-config", help="Generate MCP server configuration"
+    )
     mcp_config_parser.add_argument("--output", "-o", help="Write config to file")
     mcp_config_parser.set_defaults(func=cmd_mcp_config)
 
     # watch subcommand
-    watch_parser = subparsers.add_parser("watch", help="Watch for file changes and auto-update the index")
+    watch_parser = subparsers.add_parser(
+        "watch", help="Watch for file changes and auto-update the index"
+    )
     watch_parser.set_defaults(func=cmd_watch)
+
+    # callers subcommand
+    callers_parser = subparsers.add_parser(
+        "callers", help="Find symbols that call the given symbol"
+    )
+    callers_parser.add_argument(
+        "symbol", help="Symbol to find callers for (e.g., extract_edges_from_file)"
+    )
+    callers_parser.add_argument(
+        "--limit",
+        "-l",
+        type=int,
+        default=20,
+        help="Maximum number of callers to return (default: 20)",
+    )
+    callers_parser.add_argument(
+        "--json", action="store_true", help="Output in JSON format"
+    )
+    callers_parser.set_defaults(func=cmd_callers)
 
     return parser
 
@@ -582,30 +738,46 @@ def create_parser() -> argparse.ArgumentParser:
 # Standalone entry points for individual commands (for pyproject.toml)
 def init_command() -> None:
     """Entry point for codegraph-init."""
-    parser = argparse.ArgumentParser(prog="codegraph-init", description="Initialize CodeGrapher in a repository")
+    parser = argparse.ArgumentParser(
+        prog="codegraph-init", description="Initialize CodeGrapher in a repository"
+    )
     parser.add_argument("--no-model", action="store_true", help="Skip model download")
-    parser.add_argument("--no-hook", action="store_true", help="Skip git hook installation")
+    parser.add_argument(
+        "--no-hook", action="store_true", help="Skip git hook installation"
+    )
     args = parser.parse_args()
     cmd_init(args)
 
 
 def build_command() -> None:
     """Entry point for codegraph-build."""
-    parser = argparse.ArgumentParser(prog="codegraph-build", description="Build the CodeGrapher index")
+    parser = argparse.ArgumentParser(
+        prog="codegraph-build", description="Build the CodeGrapher index"
+    )
     parser.add_argument("--full", action="store_true", help="Perform a full rebuild")
-    parser.add_argument("--force", action="store_true", help="Force rebuild even if index exists")
+    parser.add_argument(
+        "--force", action="store_true", help="Force rebuild even if index exists"
+    )
     args = parser.parse_args()
     cmd_build(args)
 
 
 def query_command() -> None:
     """Entry point for codegraph-query."""
-    parser = argparse.ArgumentParser(prog="codegraph-query", description="Query the CodeGrapher index")
+    parser = argparse.ArgumentParser(
+        prog="codegraph-query", description="Query the CodeGrapher index"
+    )
     parser.add_argument("query", help="Search query")
     parser.add_argument("--cursor-file", help="File path for import-closure pruning")
-    parser.add_argument("--max-depth", type=int, default=1, help="Graph hop depth (default: 1)")
-    parser.add_argument("--token-budget", type=int, default=DEFAULT_TOKEN_BUDGET,
-                        help="Maximum tokens in response")
+    parser.add_argument(
+        "--max-depth", type=int, default=1, help="Graph hop depth (default: 1)"
+    )
+    parser.add_argument(
+        "--token-budget",
+        type=int,
+        default=DEFAULT_TOKEN_BUDGET,
+        help="Maximum tokens in response",
+    )
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
     args = parser.parse_args()
     cmd_query(args)
@@ -613,16 +785,22 @@ def query_command() -> None:
 
 def update_command() -> None:
     """Entry point for codegraph-update."""
-    parser = argparse.ArgumentParser(prog="codegraph-update", description="Update the CodeGrapher index")
+    parser = argparse.ArgumentParser(
+        prog="codegraph-update", description="Update the CodeGrapher index"
+    )
     parser.add_argument("file", nargs="?", help="Single file to update")
-    parser.add_argument("--git-changed", action="store_true", help="Update all git-changed Python files")
+    parser.add_argument(
+        "--git-changed", action="store_true", help="Update all git-changed Python files"
+    )
     args = parser.parse_args()
     cmd_update(args)
 
 
 def mcp_config_command() -> None:
     """Entry point for codegraph-mcp-config."""
-    parser = argparse.ArgumentParser(prog="codegraph-mcp-config", description="Generate MCP server configuration")
+    parser = argparse.ArgumentParser(
+        prog="codegraph-mcp-config", description="Generate MCP server configuration"
+    )
     parser.add_argument("--output", "-o", help="Write config to file")
     args = parser.parse_args()
     cmd_mcp_config(args)
@@ -630,9 +808,32 @@ def mcp_config_command() -> None:
 
 def watch_command() -> None:
     """Entry point for codegraph-watch."""
-    parser = argparse.ArgumentParser(prog="codegraph-watch", description="Watch for file changes and auto-update the CodeGrapher index")
+    parser = argparse.ArgumentParser(
+        prog="codegraph-watch",
+        description="Watch for file changes and auto-update the CodeGrapher index",
+    )
     args = parser.parse_args()
     cmd_watch(args)
+
+
+def callers_command() -> None:
+    """Entry point for codegraph-callers."""
+    parser = argparse.ArgumentParser(
+        prog="codegraph-callers", description="Find symbols that call the given symbol"
+    )
+    parser.add_argument(
+        "symbol", help="Symbol to find callers for (e.g., extract_edges_from_file)"
+    )
+    parser.add_argument(
+        "--limit",
+        "-l",
+        type=int,
+        default=20,
+        help="Maximum number of callers to return (default: 20)",
+    )
+    parser.add_argument("--json", action="store_true", help="Output in JSON format")
+    args = parser.parse_args()
+    cmd_callers(args)
 
 
 def main() -> None:

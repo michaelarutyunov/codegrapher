@@ -42,18 +42,14 @@ class Symbol(BaseModel):
     signature: str = Field(..., description="Function or class signature")
     doc: Optional[str] = Field(None, description="First sentence of docstring")
     mutates: str = Field("", description="Comma-separated mutated variables")
-    embedding: np.ndarray = Field(
-        ..., description="768-dim embedding vector"
-    )
+    embedding: np.ndarray = Field(..., description="768-dim embedding vector")
 
     @field_validator("embedding")
     @classmethod
     def validate_embedding(cls, v: np.ndarray) -> np.ndarray:
         """Validate embedding dimension and dtype."""
         if v.shape != (EMBEDDING_DIM,):
-            raise ValueError(
-                f"Embedding must be {EMBEDDING_DIM}-dim, got {v.shape}"
-            )
+            raise ValueError(f"Embedding must be {EMBEDDING_DIM}-dim, got {v.shape}")
         if v.dtype != np.float32:
             raise ValueError(f"Embedding must be float32, got {v.dtype}")
         return v
@@ -385,6 +381,35 @@ class Database:
         )
         conn.commit()
 
+    def get_callers_for_symbol(self, symbol_id: str) -> List[str]:
+        """Get all callers of a given symbol.
+
+        Finds all symbols that have call edges pointing to the given symbol.
+        Uses LIKE matching to handle variations in edge format.
+
+        Args:
+            symbol_id: The symbol ID to find callers for (e.g., "extract_edges_from_file")
+
+        Returns:
+            List of caller symbol IDs
+
+        Examples:
+            >>> db.get_callers_for_symbol("extract_edges_from_file")
+            ["cli.cmd_build", "indexer.IncrementalIndexer.update_file", ...]
+        """
+        conn = self.connect()
+        cursor = conn.execute(
+            """
+            SELECT caller_id
+            FROM edges
+            WHERE type = 'call' AND callee_id LIKE ?
+            ORDER BY caller_id
+            """,
+            (f"%{symbol_id}",),
+        )
+        rows = cursor.fetchall()
+        return [row["caller_id"] for row in rows]
+
     def get_meta(self, key: str) -> Optional[str]:
         """Get a metadata value by key.
 
@@ -430,13 +455,11 @@ class Database:
         # Insert new terms
         conn.executemany(
             "INSERT INTO sparse_terms (symbol_id, token) VALUES (?, ?)",
-            [(symbol_id, token) for token in set(tokens)]  # Use set to deduplicate
+            [(symbol_id, token) for token in set(tokens)],  # Use set to deduplicate
         )
         conn.commit()
 
-    def insert_sparse_terms_batch(
-        self, symbol_tokens: dict[str, List[str]]
-    ) -> None:
+    def insert_sparse_terms_batch(self, symbol_tokens: dict[str, List[str]]) -> None:
         """Insert sparse terms for multiple symbols in a single transaction.
 
         Args:
@@ -454,7 +477,7 @@ class Database:
 
         conn.executemany(
             "INSERT OR REPLACE INTO sparse_terms (symbol_id, token) VALUES (?, ?)",
-            terms_to_insert
+            terms_to_insert,
         )
         conn.commit()
 
@@ -469,8 +492,7 @@ class Database:
         """
         conn = self.connect()
         rows = conn.execute(
-            "SELECT token FROM sparse_terms WHERE symbol_id = ?",
-            (symbol_id,)
+            "SELECT token FROM sparse_terms WHERE symbol_id = ?", (symbol_id,)
         ).fetchall()
         return [row["token"] for row in rows]
 
@@ -515,7 +537,7 @@ class Database:
         conn = self.connect()
         conn.executemany(
             "DELETE FROM sparse_terms WHERE symbol_id = ?",
-            [(sid,) for sid in symbol_ids]
+            [(sid,) for sid in symbol_ids],
         )
         conn.commit()
 
